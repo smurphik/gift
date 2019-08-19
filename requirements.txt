@@ -1,5 +1,6 @@
 aiohttp
 aiomysql
 asyncio
+pymysql
 pytest
 pytest-ordering

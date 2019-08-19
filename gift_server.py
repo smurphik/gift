@@ -27,7 +27,7 @@ def init_global_id():
 
     try:
         conn = pymysql.connect(host='localhost', port=3306, user='gift_server',
-                               password='qwertyqwer', db='gift_db',
+                               password='Qwerty!0', db='gift_db',
                                autocommit=True)
     except:
         print('FAIL: Make sure that you have configured the database '
@@ -69,7 +69,7 @@ async def store_import(request):
 
         pool = await aiomysql.create_pool(
             host='localhost', port=3306, user='gift_server',
-            password='qwertyqwer', db='gift_db', loop=loop, charset='utf8')
+            password='Qwerty!0', db='gift_db', loop=loop, charset='utf8')
 
         async with pool.acquire() as conn:
 
