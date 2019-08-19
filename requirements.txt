@@ -1,0 +1,5 @@
+aiohttp
+aiomysql
+asyncio
+pytest
+pytest-ordering
