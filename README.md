@@ -15,10 +15,11 @@ REST API сервис для хранения и анализа данных о 
 
     mysql> CREATE DATABASE gift_db CHARACTER SET utf8;
     mysql> GRANT ALL PRIVILEGES ON *.* TO 'gift_server'@'localhost' IDENTIFIED BY 'Qwerty!0';
+    mysql> \q
 
 ### Server
 
-Установка сервера
+Установка сервера (если на машине не установлен `git`, можно установить его или скачать содержимое репозитория, используя интерфейс github.com):
 
     $ git clone https://github.com/smurphik/gift
     $ cd gift
