@@ -2,17 +2,10 @@
 
 import os, shutil
 
-def remove(name):
-    if os.path.isfile(name):
-        os.remove(name)
-    elif os.path.isdir(name):
-        shutil.rmtree(name)
-
 # Run testing
 os.chdir('tests')
 os.system('pytest -vv -s $@')
 
 # Delete a garbage data
 os.chdir(os.path.pardir)
-remove('.pytest_cache')
 

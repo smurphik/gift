@@ -22,6 +22,13 @@ citizen_fields = ['citizen_id', 'town', 'street', 'building',
 #                    and write it to `glob_id`
 # `update_global_id` - increment `glob_id`, save it for future
 #                      `init_global_id` and retern it
+#
+# N.B.: Of course, table `unique_ids_table` is not necessary. At the server
+# start, we can simply find the maximum index among the table names `import_X`.
+# But I think it's not very conceptual. In the future, the customer may request
+# the deletion of the data tables. Or the administrator can delete some tables
+# for some reasons. This may cause duplicating indexes for different tables on
+# the client-side. The table `unique_ids_table` helps to avoid this duplication.
 def init_global_id():
     """Table global counter initialization"""
 
