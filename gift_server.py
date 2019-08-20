@@ -5,7 +5,7 @@ One-thread asynchronous server for storage and analysis data on citizens
 """
 
 from aiohttp import web
-import aiomysql, asyncio, sys, pymysql
+import aiomysql, asyncio, sys, pymysql, traceback
 import json
 
 # A shareable counter for providing unique id for data tables
@@ -29,7 +29,7 @@ def init_global_id():
         conn = pymysql.connect(host='localhost', port=3306, user='gift_server',
                                password='Qwerty!0', db='gift_db',
                                autocommit=True)
-    except:
+    except Exception:
         print('FAIL: Make sure that you have configured the database '
               '"gift_db" according to the README')
         sys.exit()
@@ -39,7 +39,7 @@ def init_global_id():
             # read last unique id
             cursor.execute('SELECT MAX(id) FROM unique_ids_table;')
             return int(cursor.fetchone()[0])
-        except:
+        except Exception:
             # create id-table and insert zero
             cursor.execute('CREATE TABLE unique_ids_table (id int);')
             cursor.execute('INSERT INTO unique_ids_table VALUES(0);')
@@ -73,9 +73,9 @@ async def store_import(request):
 
         async with pool.acquire() as conn:
 
-            unique_id = await update_global_id(conn)
-            import_id = 'import_' + str(unique_id)
-            rel_id = 'rel_' + str(unique_id)
+            numeric_id = await update_global_id(conn)
+            import_id = 'import_' + str(numeric_id)
+            rel_id = 'rel_' + str(numeric_id)
 
             async with conn.cursor() as cur:
 
@@ -131,12 +131,68 @@ async def store_import(request):
 
         pool.close()
 
-        response_obj = {'data': {'import_id': unique_id}}
-        return web.Response(text=json.dumps(response_obj), status=201)
+        response_obj = {'data': {'import_id': numeric_id}}
+        return web.json_response(response_obj, status=201)
 
     except Exception as e:
-        response_obj = {'error': str(e)}
-        return web.Response(text=json.dumps(response_obj), status=500)
+        traceback.print_exc()
+        return web.json_response({'error': str(e)}, status=500)
+
+async def load_import(request):
+    """Handle /imports/{numeric_id}/citizens GET-request"""
+
+    try:
+
+        pool = await aiomysql.create_pool(
+            host='localhost', port=3306, user='gift_server',
+            password='Qwerty!0', db='gift_db', loop=loop, charset='utf8')
+
+        async with pool.acquire() as conn:
+
+            numeric_id = int(request.match_info['numeric_id'])
+            import_id = 'import_' + str(numeric_id)
+            rel_id = 'rel_' + str(numeric_id)
+
+            async with conn.cursor() as cur:
+
+                # read data from import_id
+                try:
+                    await cur.execute(f'SELECT * FROM {import_id};')
+                except Exception as e:
+                    return web.json_response({'error': str(e)}, status=404)
+                response = await cur.fetchall()
+                citizens_obj_list = []
+                for r in response:
+                    citizen_obj = dict(zip(citizen_fields, r))
+                    citizens_obj_list.append(citizen_obj)
+                response_obj = {'data': citizens_obj_list}
+
+                # read data from rel_id
+                try:
+                    await cur.execute(f'SELECT * FROM {rel_id};')
+                except Exception as e:
+                    return web.json_response({'error': str(e)}, status=404)
+                response = await cur.fetchall()
+                rels = dict()
+                for r in response:
+                    i, j = r[0], r[1]
+                    if i not in rels:
+                        rels[i] = list()
+                    rels[i].append(j)
+                for citizen in response_obj['data']:
+                    i = citizen['citizen_id']
+                    if i in rels:
+                        citizen['relatives'] = rels[i]
+                    else:
+                        citizen['relatives'] = []
+
+        pool.close()
+
+        return web.json_response(response_obj, status=200)
+
+    except Exception as e:
+        traceback.print_exc()
+        return web.json_response({'error': str(e)}, status=500)
 
 
 def main():
@@ -148,6 +204,7 @@ def main():
 
     app = web.Application()
     app.router.add_post('/imports', store_import)
+    app.router.add_get('/imports/{numeric_id:[0-9]+}/citizens', load_import)
 
     web.run_app(app)
 
