@@ -62,7 +62,7 @@ async def store_import(request):
     """Handle /imports POST-request"""
 
     try:
-        obj = await request.json()
+        post_obj = await request.json()
 
         # Check data
         # TODO: status 400
@@ -80,7 +80,7 @@ async def store_import(request):
             async with conn.cursor() as cur:
 
                 # Create table for citizen list
-                sql = (
+                await cur.execute(
                     f'CREATE TABLE {import_id} ('
                         'citizen_id int,'
                         'town       varchar(255),'
@@ -92,47 +92,109 @@ async def store_import(request):
                         'gender     varchar(255)'
                     ');'
                 )
-                await cur.execute(sql)
 
                 # Fill table
-                for citizen in obj['citizens']:
+                sql = ''
+                for citizen_obj in post_obj['citizens']:
                     vals = []
                     for field in citizen_fields:
-                        v = citizen[field]
+                        v = citizen_obj[field]
                         if isinstance(v, int):
                             vals.append(str(v))
                         else:
                             vals.append(f"'{v}'")
-                    sql = 'INSERT INTO {} VALUES ({});'.format(import_id,
-                                                               ', '.join(vals))
+                    sql += 'INSERT INTO {} VALUES ({});'.format(import_id,
+                                                                ', '.join(vals))
+                if sql:
                     await cur.execute(sql)
 
                 # Create table for citizens family relationship
-                sql = (
-                    f'CREATE TABLE {rel_id} ('
-                        'citizen_a int,'
-                        'citizen_b int'
-                    ');'
-                )
-                await cur.execute(sql)
+                await cur.execute(f'CREATE TABLE {rel_id} (x int, y int);')
 
                 # Fill table
-                for cit_item in obj['citizens']:
-                    citizen_a = cit_item['citizen_id']
-                    for citizen_b in cit_item['relatives']:
-                        sql = 'INSERT INTO {} VALUES ({}, {});'.format(
-                            rel_id, citizen_a, citizen_b
-                        )
-                        await cur.execute(sql)
+                sql = ''
+                for citizen_obj in post_obj['citizens']:
+                    x = citizen_obj['citizen_id']
+                    for y in citizen_obj['relatives']:
+                        sql += f'INSERT INTO {rel_id} VALUES ({x}, {y});'
+                if sql:
+                    await cur.execute(sql)
 
-                # It seems settings of autocommit depends on aiohttp version.
-                # So, let it be
-                await conn.commit()
+            await conn.commit()
 
         pool.close()
 
         response_obj = {'data': {'import_id': numeric_id}}
         return web.json_response(response_obj, status=201)
+
+    except Exception as e:
+        traceback.print_exc()
+        return web.json_response({'error': str(e)}, status=500)
+
+async def alter_import(request):
+    """Handle /imports/{numeric_id}/citizens/citizen_id PATCH-request"""
+
+    try:
+        patch_obj = await request.json()
+
+        # Check data
+        # TODO: status 400
+
+        pool = await aiomysql.create_pool(
+            host='localhost', port=3306, user='gift_server',
+            password='Qwerty!0', db='gift_db', loop=loop, charset='utf8')
+
+        async with pool.acquire() as conn:
+
+            numeric_id = int(request.match_info['numeric_id'])
+            import_id = 'import_' + str(numeric_id)
+            rel_id = 'rel_' + str(numeric_id)
+            citizen_id = int(request.match_info['citizen_id'])
+
+            async with conn.cursor() as cur:
+
+                # alter fields in table import_id
+                vals = []
+                for field, value in patch_obj.items():
+                    if field == 'relatives':
+                        continue
+                    if isinstance(value, int):
+                        vals.append(f'{field} = {value}')
+                    else:
+                        vals.append(f"{field} = '{value}'")
+                await cur.execute(
+                    f'UPDATE {import_id} ' +
+                    'SET {} '.format(', '.join(vals)) +
+                    f'WHERE citizen_id = {citizen_id};'
+                )
+
+                # alter relations in table import_id
+                i = citizen_id
+                sql = f'DELETE FROM {rel_id} WHERE x = {i} OR y = {i};'
+                for j in patch_obj['relatives']:
+                    sql += f'INSERT INTO {rel_id} VALUES ({i}, {j});'
+                    sql += f'INSERT INTO {rel_id} VALUES ({j}, {i});'
+                await cur.execute(sql)
+
+                # control reading for response to client
+                try:
+                    await cur.execute(f'SELECT * FROM {import_id} ' +
+                                      f'WHERE citizen_id = {citizen_id};')
+                    response = await cur.fetchone()
+                    citizen_obj = dict(zip(citizen_fields, response))
+                    await cur.execute(f'SELECT y FROM {rel_id} ' +
+                                      f'WHERE x = {citizen_id};')
+                    rels = await cur.fetchone()
+                    citizen_obj['relatives'] = list(rels) if rels else list()
+                except Exception as e:
+                    return web.json_response({'error': str(e)}, status=404)
+
+            await conn.commit()
+
+        pool.close()
+
+        response_obj = {'data': citizen_obj}
+        return web.json_response(response_obj, status=200)
 
     except Exception as e:
         traceback.print_exc()
@@ -204,6 +266,7 @@ def main():
 
     app = web.Application()
     app.router.add_post('/imports', store_import)
+    app.router.add_patch('/imports/{numeric_id:[0-9]+}/citizens/{citizen_id:[0-9]+}', alter_import)
     app.router.add_get('/imports/{numeric_id:[0-9]+}/citizens', load_import)
 
     web.run_app(app)
