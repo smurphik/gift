@@ -56,6 +56,16 @@ def test_f():
 
     assert test_response == sample_response
 
+    # GET donators distribution by months
+    r = s.get(f'http://0.0.0.0:8080/imports/{import_id}/citizens/birthdays')
+    assert r.status_code == 200
+    test_response = r.json()['data']
+
+    # read sample response
+    sample_response = json.load(open('data/baseset/months_distr.json'))
+
+    assert test_response == sample_response
+
     # clean database
     clean_tables(import_id)
 

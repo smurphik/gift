@@ -45,7 +45,9 @@ def init_global_id():
         try:
             # read last unique id
             cursor.execute('SELECT MAX(id) FROM unique_ids_table;')
-            return int(cursor.fetchone()[0])
+            max_ = int(cursor.fetchone()[0])
+            cursor.execute(f'DELETE FROM unique_ids_table WHERE id < {max_};')
+            return max_
         except Exception:
             # create id-table and insert zero
             cursor.execute('CREATE TABLE unique_ids_table (id int);')
@@ -263,6 +265,70 @@ async def load_import(request):
         traceback.print_exc()
         return web.json_response({'error': str(e)}, status=500)
 
+async def load_donators_by_months(request):
+    """Handle /imports/{numeric_id}/citizens/birthdays GET-request"""
+
+    try:
+
+        pool = await aiomysql.create_pool(
+            host='localhost', port=3306, user='gift_server',
+            password='Qwerty!0', db='gift_db', loop=loop, charset='utf8')
+
+        async with pool.acquire() as conn:
+
+            numeric_id = int(request.match_info['numeric_id'])
+            import_id = 'import_' + str(numeric_id)
+            rel_id = 'rel_' + str(numeric_id)
+
+            async with conn.cursor() as cur:
+
+                # read data from import_id
+                try:
+                    await cur.execute(
+                        f'SELECT citizen_id, birth_date FROM {import_id};'
+                    )
+                except Exception as e:
+                    return web.json_response({'error': str(e)}, status=404)
+                response = await cur.fetchall()
+                id_to_info = dict()
+                for r in response:
+                    id_to_info[r[0]] = {'bdate': r[1], 'rels': []}
+
+                # read data from rel_id
+                try:
+                    await cur.execute(f'SELECT * FROM {rel_id};')
+                except Exception as e:
+                    return web.json_response({'error': str(e)}, status=404)
+                response = await cur.fetchall()
+                for r in response:
+                    id_to_info[r[0]]['rels'].append(r[1])
+
+                # calc distribution by months
+                months_dist = [dict() for _ in range(13)]
+                for i, obj in id_to_info.items():
+                    month = int(obj['bdate'].split('.')[1])
+                    for donator in obj['rels']:
+                        present_cnt = months_dist[month]
+                        if donator not in present_cnt:
+                            present_cnt[donator] = 0
+                        present_cnt[donator] += 1
+
+                # convert distribution to json-response
+                response_obj = {str(i): [] for i in range(1, 13)}
+                for month, present_cnt in enumerate(months_dist[1:], 1):
+                    for donator, cnt in present_cnt.items():
+                        response_obj[str(month)].append({'citizen_id': donator,
+                                                         'presents': cnt})
+                response_obj = {'data': response_obj}
+
+        pool.close()
+
+        return web.json_response(response_obj, status=200)
+
+    except Exception as e:
+        traceback.print_exc()
+        return web.json_response({'error': str(e)}, status=500)
+
 
 def main():
 
@@ -275,6 +341,7 @@ def main():
     app.router.add_post('/imports', store_import)
     app.router.add_patch('/imports/{numeric_id:[0-9]+}/citizens/{citizen_id:[0-9]+}', alter_import)
     app.router.add_get('/imports/{numeric_id:[0-9]+}/citizens', load_import)
+    app.router.add_get('/imports/{numeric_id:[0-9]+}/citizens/birthdays', load_donators_by_months)
 
     web.run_app(app)
 
