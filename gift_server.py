@@ -7,6 +7,8 @@ One-thread asynchronous server for storage and analysis data on citizens
 from aiohttp import web
 import aiomysql, asyncio, sys, pymysql, traceback, json, datetime, numpy
 
+class IncorrectData(Exception): pass
+
 # A shareable counter for providing unique id for data tables
 glob_id = 0
 
@@ -63,9 +65,103 @@ async def update_global_id(conn):
         await cursor.execute(f'INSERT INTO unique_ids_table VALUES({glob_id});')
     return glob_id
 
-# datetime.date(*(int(i) for i in '2016.02.29'.split('.')))
-def check_citizen_data(citizen_obj):
-    pass #TODO
+class CheckRelsStruct():
+    def __init__(self):
+        self.citizens = set()
+        self.relatives = set()
+
+def check_citizen_data(citizen_obj, rel_check_str, is_post=False):
+
+    # POST- & PATCH-specific checks
+    if is_post:
+        if len(citizen_obj) != 9:
+            raise IncorrectData(f'Too few fields for citizen {citizen_obj}')
+        # N.B.: It's a pity, but the standard expression `assert` here and in
+        # many other places is risky, because the code can be run in optimized
+        # mode. To implement own function `Assert` is also not desirable,
+        # because that will create a lot of unnecessary strings. So, code
+        # consist many bulky if-raise combinations
+    else:
+        if 'citizen_id' in citizen_obj:
+            raise IncorrectData(
+                f"Field 'citizen_id' is not changeable by PATCH-request")
+
+    # Check every field
+    for field, value in citizen_obj.items():
+
+        # Check 'citizen_id', 'apartment'
+        if field in {'citizen_id', 'apartment'}:
+            if not (isinstance(value, int) and value >= 0):
+                raise IncorrectData(
+                    f"Field '{field}' must be non-negative " +
+                    "integer, not {} '{}'".format(type(value), value))
+            if field == 'citizen_id':
+                if value in rel_check_str.citizens:
+                    raise IncorrectData(
+                        f"Duplicated citizen with id '{citizen_id}'")
+                rel_check_str.citizens.add(value)
+            continue
+
+        # Pass 'relatives'
+        elif field == 'relatives':
+            if not isinstance(value, list):
+                raise IncorrectData(f"Field '{field}' should be " +
+                                    f"list of integers, not '{value}'")
+            for rel in value:
+                if not isinstance(rel, int):
+                    raise IncorrectData(f"Field '{field}' should be " +
+                                        f"list of integers, not '{value}'")
+                if is_post:
+                    # for POST-request save tuples:
+                    # {(citizen_id, relation0), (citizen_id, relation1), ...}
+                    rel_pair = (citizen_obj['citizen_id'], rel)
+                    if rel_pair in rel_check_str.relatives:
+                        raise IncorrectData(f"Duplicated relation: {rel_pair}")
+                    rel_check_str.relatives.add(rel_pair)
+                else:
+                    # for PATCH-request save just id of relations:
+                    # {relation0, relation1, ...}
+                    if rel in rel_check_str.relatives:
+                        raise IncorrectData(f"Duplicated relation: {rel}")
+                    rel_check_str.relatives.add(rel)
+            continue
+
+        # Other fields should be strings, ecxept 'relatives'
+        if not isinstance(value, str):
+            if value in citizen_fields: # don't overlap `incorrect field` case
+                raise IncorrectData(f"Field '{field}' must be string, not " +
+                                    "{} '{}'".format(type(value), value))
+
+        # Check 'town', 'street', 'building'
+        if field in {'town', 'street', 'building'}:
+            for ch in value:
+                if ch.isalpha() or ch.isdigit():
+                    break
+            else:
+                raise IncorrectData(f"Incorrect field '{field}': '{value}'")
+
+        # Check 'name'
+        elif field == 'name':
+            if not value.strip():
+                raise IncorrectData(f"Incorrect field '{field}': '{value}'")
+
+        # Check 'birth_date'
+        elif field == 'birth_date':
+            try:
+                d = datetime.date(*(int(i) for i in value.split('.')[::-1]))
+            except:
+                raise IncorrectData(f"Incorrect field '{field}': '{value}'")
+            if d > datetime.datetime.utcnow().date():
+                raise IncorrectData(f"Incorrect field '{field}': '{value}'")
+
+        # Check 'gender'
+        elif field == 'gender':
+            if value != 'male' and value != 'female':
+                raise IncorrectData(f"Unknown gender: '{value}'")
+
+        # Incorrect field
+        else:
+            raise IncorrectData(f"Incorrect field name: '{field}'")
 
 def invert_data(citizen_obj):
     """Convert field \"date\" 'DD.MM.YYYY' -> 'YYYY.MM.DD' or back"""
@@ -76,13 +172,38 @@ async def store_import(request):
     """Handle /imports POST-request"""
 
     try:
-        post_obj = await request.json()
 
-        # Check data & invert field "date" (dd.mm.yyyy -> yyyy.mm.dd)
-        # TODO: status 400, rels
-        for citizen_obj in post_obj['citizens']:
-            invert_data(citizen_obj)
-            check_citizen_data(citizen_obj)
+        try:
+            post_obj = await request.json()
+        except Exception as e:
+            response_obj = {'error': 'Incorrect JSON-object'}
+            return web.json_response(response_obj, status=400)
+
+        # check data correctness & invert date (dd.mm.yyyy -> yyyy.mm.dd)
+        try:
+
+            # check all fields except 'relations' & invert date
+            rel_check_str = CheckRelsStruct()
+            for citizen_obj in post_obj['citizens']:
+                check_citizen_data(citizen_obj, rel_check_str, True)
+                invert_data(citizen_obj)
+
+            # check relations
+            cits = rel_check_str.citizens
+            rels = rel_check_str.relatives
+            while rels:
+                rel_pair = rels.pop()
+                if rel_pair[0] not in cits:
+                    raise IncorrectData(f"Incorrect relation {rel_pair}")
+                if rel_pair[1] not in cits:
+                    raise IncorrectData(f"Incorrect relation {rel_pair}")
+                inv_pair = rel_pair[::-1]
+                if inv_pair not in rels:
+                    raise IncorrectData(f"Incorrect relation {rel_pair}")
+                rels.remove(inv_pair)
+
+        except IncorrectData as e:
+            return web.json_response({'error': str(e)}, status=400)
 
         pool = await aiomysql.create_pool(
             host='localhost', port=3306, user='gift_server',
@@ -148,13 +269,27 @@ async def alter_import(request):
     """Handle /imports/{numeric_id}/citizens/citizen_id PATCH-request"""
 
     try:
-        patch_obj = await request.json()
 
-        # Check data
-        # TODO: status 400, rels
-        if 'birth_date' in patch_obj:
-            invert_data(patch_obj)
-        check_citizen_data(patch_obj)
+        try:
+            patch_obj = await request.json()
+        except Exception as e:
+            response_obj = {'error': 'Incorrect JSON-object'}
+            return web.json_response(response_obj, status=400)
+
+        # check data correctness
+        try:
+
+            # check all fields except 'relations'
+            rel_check_str = CheckRelsStruct()
+            check_citizen_data(patch_obj, rel_check_str)
+            rels = rel_check_str.relatives
+
+            # invert date
+            if 'birth_date' in patch_obj:
+                invert_data(patch_obj)
+
+        except IncorrectData as e:
+            return web.json_response({'error': str(e)}, status=400)
 
         pool = await aiomysql.create_pool(
             host='localhost', port=3306, user='gift_server',
@@ -168,6 +303,17 @@ async def alter_import(request):
             citizen_id = int(request.match_info['citizen_id'])
 
             async with conn.cursor() as cur:
+
+                # check relations
+                await cur.execute(f'SELECT citizen_id FROM {import_id};')
+                async for r in cur:
+                    r = r[0]
+                    if r in rels:
+                        rels.remove(r)
+                if rels:
+                    response_obj = {'error': 'Wrong relations: {}'.format(
+                        [(citizen_id, r) for r in rels])}
+                    return web.json_response(response_obj, status=400)
 
                 # alter fields in table import_id
                 vals = []
