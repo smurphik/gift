@@ -205,9 +205,7 @@ async def store_import(request):
         except IncorrectData as e:
             return web.json_response({'error': str(e)}, status=400)
 
-        pool = await aiomysql.create_pool(
-            host='localhost', port=3306, user='gift_server',
-            password='Qwerty!0', db='gift_db', loop=loop, charset='utf8')
+        pool = request.config_dict['pool']
 
         async with pool.acquire() as conn:
 
@@ -256,8 +254,6 @@ async def store_import(request):
 
             await conn.commit()
 
-        pool.close()
-
         response_obj = {'data': {'import_id': numeric_id}}
         return web.json_response(response_obj, status=201)
 
@@ -291,9 +287,7 @@ async def alter_import(request):
         except IncorrectData as e:
             return web.json_response({'error': str(e)}, status=400)
 
-        pool = await aiomysql.create_pool(
-            host='localhost', port=3306, user='gift_server',
-            password='Qwerty!0', db='gift_db', loop=loop, charset='utf8')
+        pool = request.config_dict['pool']
 
         async with pool.acquire() as conn:
 
@@ -355,8 +349,6 @@ async def alter_import(request):
 
             await conn.commit()
 
-        pool.close()
-
         response_obj = {'data': citizen_obj}
         return web.json_response(response_obj, status=200)
 
@@ -369,9 +361,7 @@ async def load_import(request):
 
     try:
 
-        pool = await aiomysql.create_pool(
-            host='localhost', port=3306, user='gift_server',
-            password='Qwerty!0', db='gift_db', loop=loop, charset='utf8')
+        pool = request.config_dict['pool']
 
         async with pool.acquire() as conn:
 
@@ -411,8 +401,6 @@ async def load_import(request):
                     else:
                         citizen['relatives'] = []
 
-        pool.close()
-
         return web.json_response(response_obj, status=200)
 
     except Exception as e:
@@ -424,9 +412,7 @@ async def load_donators_by_months(request):
 
     try:
 
-        pool = await aiomysql.create_pool(
-            host='localhost', port=3306, user='gift_server',
-            password='Qwerty!0', db='gift_db', loop=loop, charset='utf8')
+        pool = request.config_dict['pool']
 
         async with pool.acquire() as conn:
 
@@ -473,8 +459,6 @@ async def load_donators_by_months(request):
                                                          'presents': cnt})
                 response_obj = {'data': response_obj}
 
-        pool.close()
-
         return web.json_response(response_obj, status=200)
 
     except Exception as e:
@@ -486,9 +470,7 @@ async def load_agestat_by_towns(request):
 
     try:
 
-        pool = await aiomysql.create_pool(
-            host='localhost', port=3306, user='gift_server',
-            password='Qwerty!0', db='gift_db', loop=loop, charset='utf8')
+        pool = request.config_dict['pool']
 
         async with pool.acquire() as conn:
 
@@ -508,14 +490,19 @@ async def load_agestat_by_towns(request):
                 #numpy.percentile interpolation='linear'
                 response_obj = {'data': None}
 
-        pool.close()
-
         return web.json_response(response_obj, status=200)
 
     except Exception as e:
         traceback.print_exc()
         return web.json_response({'error': str(e)}, status=500)
 
+async def init(app):
+    app['pool'] = await aiomysql.create_pool(
+        host='localhost', port=3306, user='gift_server',
+        password='Qwerty!0', db='gift_db', loop=loop, charset='utf8')
+    yield
+    pool.close()
+    await pool.wait_closed()
 
 def main():
 
@@ -525,6 +512,7 @@ def main():
     glob_id = init_global_id()
 
     app = web.Application()
+    app.cleanup_ctx.append(init)
     app.router.add_post('/imports', store_import)
     app.router.add_patch(
         '/imports/{numeric_id:[0-9]+}/citizens/{citizen_id:[0-9]+}',
