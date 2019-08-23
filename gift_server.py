@@ -86,10 +86,10 @@ def check_citizen_data(citizen_obj, rel_check_str, is_post=False):
             raise IncorrectData(
                 f"Field 'citizen_id' is not changeable by PATCH-request")
 
-    # Check every field
+    # check every field
     for field, value in citizen_obj.items():
 
-        # Check 'citizen_id', 'apartment'
+        # check 'citizen_id', 'apartment'
         if field in {'citizen_id', 'apartment'}:
             if not (isinstance(value, int) and value >= 0):
                 raise IncorrectData(
@@ -102,7 +102,7 @@ def check_citizen_data(citizen_obj, rel_check_str, is_post=False):
                 rel_check_str.citizens.add(value)
             continue
 
-        # Pass 'relatives'
+        # pass 'relatives'
         elif field == 'relatives':
             if not isinstance(value, list):
                 raise IncorrectData(f"Field '{field}' should be " +
@@ -126,13 +126,13 @@ def check_citizen_data(citizen_obj, rel_check_str, is_post=False):
                     rel_check_str.relatives.add(rel)
             continue
 
-        # Other fields should be strings, ecxept 'relatives'
+        # other fields should be strings, ecxept 'relatives'
         if not isinstance(value, str):
             if value in citizen_fields: # don't overlap `incorrect field` case
                 raise IncorrectData(f"Field '{field}' must be string, not " +
                                     "{} '{}'".format(type(value), value))
 
-        # Check 'town', 'street', 'building'
+        # check 'town', 'street', 'building'
         if field in {'town', 'street', 'building'}:
             for ch in value:
                 if ch.isalpha() or ch.isdigit():
@@ -140,12 +140,12 @@ def check_citizen_data(citizen_obj, rel_check_str, is_post=False):
             else:
                 raise IncorrectData(f"Incorrect field '{field}': '{value}'")
 
-        # Check 'name'
+        # check 'name'
         elif field == 'name':
             if not value.strip():
                 raise IncorrectData(f"Incorrect field '{field}': '{value}'")
 
-        # Check 'birth_date'
+        # check 'birth_date'
         elif field == 'birth_date':
             try:
                 d = datetime.date(*(int(i) for i in value.split('.')[::-1]))
@@ -154,12 +154,12 @@ def check_citizen_data(citizen_obj, rel_check_str, is_post=False):
             if d > datetime.datetime.utcnow().date():
                 raise IncorrectData(f"Incorrect field '{field}': '{value}'")
 
-        # Check 'gender'
+        # check 'gender'
         elif field == 'gender':
             if value != 'male' and value != 'female':
                 raise IncorrectData(f"Unknown gender: '{value}'")
 
-        # Incorrect field
+        # incorrect field
         else:
             raise IncorrectData(f"Incorrect field name: '{field}'")
 
@@ -215,7 +215,7 @@ async def store_import(request):
 
             async with conn.cursor() as cur:
 
-                # Create table for citizen list
+                # create table for citizen list
                 await cur.execute(
                     f'CREATE TABLE {import_id} ('
                         'citizen_id int,'
@@ -229,7 +229,7 @@ async def store_import(request):
                     ');'
                 )
 
-                # Fill table
+                # fill table
                 for citizen_obj in post_obj['citizens']:
                     vals = []
                     for field in citizen_fields:
@@ -241,10 +241,10 @@ async def store_import(request):
                     await cur.execute('INSERT INTO {} VALUES ({});'.format(
                         import_id, ', '.join(vals)))
 
-                # Create table for citizens family relationship
+                # create table for citizens family relationship
                 await cur.execute(f'CREATE TABLE {rel_id} (x int, y int);')
 
-                # Fill table
+                # fill table
                 sql = ''
                 for citizen_obj in post_obj['citizens']:
                     x = citizen_obj['citizen_id']
@@ -258,7 +258,22 @@ async def store_import(request):
         return web.json_response(response_obj, status=201)
 
     except Exception as e:
+
         traceback.print_exc()
+
+        # clean incomplete tables in case of error
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                try:
+                    await cur.execute(f"DROP TABLE {import_id};")
+                except:
+                    pass
+                try:
+                    await cur.execute(f"DROP TABLE {rel_id};")
+                except:
+                    pass
+            await conn.commit()
+
         return web.json_response({'error': str(e)}, status=500)
 
 async def alter_import(request):
@@ -307,6 +322,13 @@ async def alter_import(request):
                 if rels:
                     response_obj = {'error': 'Wrong relations: {}'.format(
                         [(citizen_id, r) for r in rels])}
+                    return web.json_response(response_obj, status=400)
+
+                # check citizen existence
+                await cur.execute(f'SELECT citizen_id FROM {import_id} ' +
+                                  f'WHERE citizen_id = {citizen_id};')
+                if not await cur.fetchone():
+                    response_obj = {'error': f'Wrong citizen_id: {citizen_id}'}
                     return web.json_response(response_obj, status=400)
 
                 # alter fields in table import_id
@@ -425,8 +447,7 @@ async def load_donators_by_months(request):
                 # read data from import_id
                 try:
                     await cur.execute(
-                        f'SELECT citizen_id, birth_date FROM {import_id};'
-                    )
+                        f'SELECT citizen_id, birth_date FROM {import_id};')
                 except Exception as e:
                     return web.json_response({'error': str(e)}, status=404)
                 id_to_info = dict()
@@ -501,8 +522,8 @@ async def init(app):
         host='localhost', port=3306, user='gift_server',
         password='Qwerty!0', db='gift_db', loop=loop, charset='utf8')
     yield
-    pool.close()
-    await pool.wait_closed()
+    app['pool'].close()
+    await app['pool'].wait_closed()
 
 def main():
 
