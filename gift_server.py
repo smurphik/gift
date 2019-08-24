@@ -5,7 +5,7 @@ One-thread asynchronous server for storage and analysis data on citizens
 """
 
 from aiohttp import web
-import sys, os, traceback, datetime, configparser
+import sys, os, traceback, datetime
 import pymysql, aiomysql, asyncio, json, numpy
 
 class IncorrectData(Exception): pass
@@ -564,15 +564,9 @@ def main():
 
     global loop, glob_id, db_password
 
-    # read password from config file
-    config = configparser.ConfigParser()
-    config.read(
-        os.path.normpath(os.path.join(os.path.expanduser('~'), '.gift.cfg')))
-    config = config['runner']
-    db_password = str(config['db_password'])
-
     # init globals
     loop = asyncio.get_event_loop()
+    db_password = 'Qwerty!0'
     glob_id = init_global_id()
 
     # make application
