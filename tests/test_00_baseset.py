@@ -21,6 +21,17 @@ def test_f():
 
     assert test_response == sample_response
 
+    # GET percentile
+    r = s.get(
+        f'http://0.0.0.0:8080/imports/{import_id}/towns/stat/percentile/age')
+    assert r.status_code == 200
+    test_response = r.json()
+
+    # read sample response
+    sample_response = json.load(open('data/baseset/percentile.json'))
+
+    assert test_response == sample_response
+
     # PATCH
     patch_request = json.load(open('data/baseset/patch_request.json'))
     r = s.patch(f'http://0.0.0.0:8080/imports/{import_id}/citizens/3',

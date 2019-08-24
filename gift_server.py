@@ -5,12 +5,10 @@ One-thread asynchronous server for storage and analysis data on citizens
 """
 
 from aiohttp import web
-import aiomysql, asyncio, sys, pymysql, traceback, json, datetime, numpy
+import sys, os, traceback, datetime, configparser
+import pymysql, aiomysql, asyncio, json, numpy
 
 class IncorrectData(Exception): pass
-
-# A shareable counter for providing unique id for data tables
-glob_id = 0
 
 citizen_fields = ['citizen_id', 'town', 'street', 'building',
                   'apartment', 'name', 'birth_date', 'gender']
@@ -35,7 +33,7 @@ def init_global_id():
 
     try:
         conn = pymysql.connect(host='localhost', port=3306, user='gift_server',
-                               password='Qwerty!0', db='gift_db',
+                               password=db_password, db='gift_db',
                                autocommit=True)
     except Exception:
         print('FAIL: Make sure that you have configured the database '
@@ -150,9 +148,12 @@ def check_citizen_data(citizen_obj, rel_check_str, is_post=False):
             try:
                 d = datetime.date(*(int(i) for i in value.split('.')[::-1]))
             except:
-                raise IncorrectData(f"Incorrect field '{field}': '{value}'")
-            if d > datetime.datetime.utcnow().date():
-                raise IncorrectData(f"Incorrect field '{field}': '{value}'")
+                raise IncorrectData(f"Incorrect field '{field}': '{value}' " +
+                                    "must be a format 'DD.MM.YYYY' string")
+            if any((d > datetime.datetime.utcnow().date(),
+                    min(len(x) for x in value.split('.')) < 2)):
+                raise IncorrectData(f"Incorrect field '{field}': '{value}' " +
+                                    "must be a format 'DD.MM.YYYY' string")
 
         # check 'gender'
         elif field == 'gender':
@@ -165,8 +166,20 @@ def check_citizen_data(citizen_obj, rel_check_str, is_post=False):
 
 def invert_data(citizen_obj):
     """Convert field \"date\" 'DD.MM.YYYY' -> 'YYYY.MM.DD' or back"""
-    citizen_obj['birth_date'] = \
-        '.'.join(map(str.strip, citizen_obj['birth_date'].split('.')[::-1]))
+    fields = citizen_obj['birth_date'].split('.')[::-1]
+    fields = list(map(str.strip, fields))
+    #fields = list(map(lambda s: s.zfill(2) if len(s) == 1 else s, fields))
+    citizen_obj['birth_date'] = '.'.join(fields)
+
+def sub_years(x, y):
+    """date x, date y -> years delta between x and y"""
+    delta = x.year - y.year
+    if x.month < y.month:
+        delta -= 1
+    elif x.month == y.month:
+        if x.day < y.day:
+            delta -= 1
+    return delta
 
 async def store_import(request):
     """Handle /imports POST-request"""
@@ -209,6 +222,7 @@ async def store_import(request):
 
         async with pool.acquire() as conn:
 
+            # inits
             numeric_id = await update_global_id(conn)
             import_id = 'import_' + str(numeric_id)
             rel_id = 'rel_' + str(numeric_id)
@@ -262,6 +276,7 @@ async def store_import(request):
         traceback.print_exc()
 
         # clean incomplete tables in case of error
+        pool = request.config_dict['pool']
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
                 try:
@@ -302,19 +317,22 @@ async def alter_import(request):
         except IncorrectData as e:
             return web.json_response({'error': str(e)}, status=400)
 
+        # inits
         pool = request.config_dict['pool']
+        numeric_id = int(request.match_info['numeric_id'])
+        import_id = 'import_' + str(numeric_id)
+        rel_id = 'rel_' + str(numeric_id)
+        citizen_id = int(request.match_info['citizen_id'])
 
         async with pool.acquire() as conn:
-
-            numeric_id = int(request.match_info['numeric_id'])
-            import_id = 'import_' + str(numeric_id)
-            rel_id = 'rel_' + str(numeric_id)
-            citizen_id = int(request.match_info['citizen_id'])
 
             async with conn.cursor() as cur:
 
                 # check relations
-                await cur.execute(f'SELECT citizen_id FROM {import_id};')
+                try:
+                    await cur.execute(f'SELECT citizen_id FROM {import_id};')
+                except Exception as e:
+                    return web.json_response({'error': str(e)}, status=404)
                 async for r in cur:
                     r = r[0]
                     if r in rels:
@@ -347,13 +365,14 @@ async def alter_import(request):
                 )
 
                 # alter relations in table import_id
+                # (ceate a single string for single transaction - this ensure
+                #  data correctness, if client send many requests in parallel)
                 i = citizen_id
-                await cur.execute(
-                    f'DELETE FROM {rel_id} WHERE x = {i} OR y = {i};')
+                sql = f'DELETE FROM {rel_id} WHERE x = {i} OR y = {i};'
                 for j in patch_obj['relatives']:
-                    await cur.execute(
-                        f'INSERT INTO {rel_id} VALUES ({i}, {j});' +
-                        f'INSERT INTO {rel_id} VALUES ({j}, {i});')
+                    sql += f'INSERT INTO {rel_id} VALUES ({i}, {j});'
+                    sql += f'INSERT INTO {rel_id} VALUES ({j}, {i});'
+                await cur.execute(sql)
 
                 # control reading for response to client
                 try:
@@ -383,13 +402,13 @@ async def load_import(request):
 
     try:
 
+        # inits
         pool = request.config_dict['pool']
+        numeric_id = int(request.match_info['numeric_id'])
+        import_id = 'import_' + str(numeric_id)
+        rel_id = 'rel_' + str(numeric_id)
 
         async with pool.acquire() as conn:
-
-            numeric_id = int(request.match_info['numeric_id'])
-            import_id = 'import_' + str(numeric_id)
-            rel_id = 'rel_' + str(numeric_id)
 
             async with conn.cursor() as cur:
 
@@ -434,13 +453,13 @@ async def load_donators_by_months(request):
 
     try:
 
+        # inits
         pool = request.config_dict['pool']
+        numeric_id = int(request.match_info['numeric_id'])
+        import_id = 'import_' + str(numeric_id)
+        rel_id = 'rel_' + str(numeric_id)
 
         async with pool.acquire() as conn:
-
-            numeric_id = int(request.match_info['numeric_id'])
-            import_id = 'import_' + str(numeric_id)
-            rel_id = 'rel_' + str(numeric_id)
 
             async with conn.cursor() as cur:
 
@@ -491,25 +510,41 @@ async def load_agestat_by_towns(request):
 
     try:
 
+        # inits
         pool = request.config_dict['pool']
+        numeric_id = int(request.match_info['numeric_id'])
+        import_id = 'import_' + str(numeric_id)
 
         async with pool.acquire() as conn:
 
-            numeric_id = int(request.match_info['numeric_id'])
-            import_id = 'import_' + str(numeric_id)
-
             async with conn.cursor() as cur:
 
-                # read towns tuple
+                # read data from import_id
                 try:
-                    await cur.execute(f'SELECT DISTINCT town FROM {import_id};')
+                    await cur.execute(
+                        f'SELECT town, birth_date FROM {import_id} ' +
+                        'ORDER BY birth_date DESC;')
                 except Exception as e:
                     return web.json_response({'error': str(e)}, status=404)
-                towns = await cur.fetchall() # TODO: rid of fetchall
+                cur_date = datetime.datetime.utcnow().date()
+                town_ages_dict = {}
+                async for r in cur:
+                    town = r[0]
+                    bdate = datetime.date(*(int(i) for i in r[1].split('.')))
+                    if town not in town_ages_dict:
+                        town_ages_dict[town] = []
+                    town_ages_dict[town].append(sub_years(cur_date, bdate))
 
-                #datetime.utcnow().date()
-                #numpy.percentile interpolation='linear'
-                response_obj = {'data': None}
+                # calc percentiles
+                percentiles_obj = []
+                for town, bdates in town_ages_dict.items():
+                    town_obj = {"town": town}
+                    town_obj["p50"] = round(numpy.percentile(bdates, 50), 2)
+                    town_obj["p75"] = round(numpy.percentile(bdates, 75), 2)
+                    town_obj["p99"] = round(numpy.percentile(bdates, 99), 2)
+                    percentiles_obj.append(town_obj)
+
+                response_obj = {'data': percentiles_obj}
 
         return web.json_response(response_obj, status=200)
 
@@ -520,18 +555,27 @@ async def load_agestat_by_towns(request):
 async def init(app):
     app['pool'] = await aiomysql.create_pool(
         host='localhost', port=3306, user='gift_server',
-        password='Qwerty!0', db='gift_db', loop=loop, charset='utf8')
+        password=db_password, db='gift_db', loop=loop, charset='utf8')
     yield
     app['pool'].close()
     await app['pool'].wait_closed()
 
 def main():
 
-    global loop, glob_id
+    global loop, glob_id, db_password
 
+    # read password from config file
+    config = configparser.ConfigParser()
+    config.read(
+        os.path.normpath(os.path.join(os.path.expanduser('~'), '.gift.cfg')))
+    config = config['runner']
+    db_password = str(config['db_password'])
+
+    # init globals
     loop = asyncio.get_event_loop()
     glob_id = init_global_id()
 
+    # make application
     app = web.Application()
     app.cleanup_ctx.append(init)
     app.router.add_post('/imports', store_import)
@@ -549,7 +593,9 @@ def main():
         load_agestat_by_towns
     )
 
+    # run
     web.run_app(app)
 
 if __name__ == "__main__":
     main()
+
