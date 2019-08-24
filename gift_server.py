@@ -10,6 +10,9 @@ import pymysql, aiomysql, asyncio, json, numpy
 
 class IncorrectData(Exception): pass
 
+# A shareable counter for providing unique id for data tables
+glob_id = 0
+
 citizen_fields = ['citizen_id', 'town', 'street', 'building',
                   'apartment', 'name', 'birth_date', 'gender']
 
@@ -31,6 +34,8 @@ citizen_fields = ['citizen_id', 'town', 'street', 'building',
 def init_global_id():
     """Table global counter initialization"""
 
+    global glob_id
+
     try:
         conn = pymysql.connect(host='localhost', port=3306, user='gift_server',
                                password=db_password, db='gift_db',
@@ -46,12 +51,12 @@ def init_global_id():
             cursor.execute('SELECT MAX(id) FROM unique_ids_table;')
             max_ = int(cursor.fetchone()[0])
             cursor.execute(f'DELETE FROM unique_ids_table WHERE id < {max_};')
-            return max_
+            glob_id = max_
         except Exception:
             # create id-table and insert zero
             cursor.execute('CREATE TABLE unique_ids_table (id int);')
             cursor.execute('INSERT INTO unique_ids_table VALUES(0);')
-            return 0
+            glob_id = 0
 
 # See comment to `init_global_id()`
 async def update_global_id(conn):
@@ -164,7 +169,7 @@ def check_citizen_data(citizen_obj, rel_check_str, is_post=False):
         else:
             raise IncorrectData(f"Incorrect field name: '{field}'")
 
-def invert_data(citizen_obj):
+def invert_date(citizen_obj):
     """Convert field \"date\" 'DD.MM.YYYY' -> 'YYYY.MM.DD' or back"""
     fields = citizen_obj['birth_date'].split('.')[::-1]
     fields = list(map(str.strip, fields))
@@ -199,7 +204,7 @@ async def store_import(request):
             rel_check_str = CheckRelsStruct()
             for citizen_obj in post_obj['citizens']:
                 check_citizen_data(citizen_obj, rel_check_str, True)
-                invert_data(citizen_obj)
+                invert_date(citizen_obj)
 
             # check relations
             cits = rel_check_str.citizens
@@ -222,69 +227,53 @@ async def store_import(request):
 
         async with pool.acquire() as conn:
 
-            # inits
-            numeric_id = await update_global_id(conn)
-            import_id = 'import_' + str(numeric_id)
-            rel_id = 'rel_' + str(numeric_id)
+            # create unique id
+            import_id = await update_global_id(conn)
 
             async with conn.cursor() as cur:
 
-                # create table for citizen list
-                await cur.execute(
-                    f'CREATE TABLE {import_id} ('
-                        'citizen_id int,'
-                        'town       varchar(255),'
-                        'street     varchar(255),'
-                        'building   varchar(255),'
-                        'apartment  int,'
-                        'name       varchar(255),'
-                        'birth_date varchar(255),'
-                        'gender     varchar(255)'
-                    ');'
-                )
-
-                # fill table
+                # fill imports table by rows with import_id
                 for citizen_obj in post_obj['citizens']:
-                    vals = []
+                    vals = [str(import_id)]
                     for field in citizen_fields:
                         v = citizen_obj[field]
                         if isinstance(v, int):
                             vals.append(str(v))
                         else:
                             vals.append(f"'{v}'")
-                    await cur.execute('INSERT INTO {} VALUES ({});'.format(
-                        import_id, ', '.join(vals)))
+                    await cur.execute('INSERT INTO imports VALUES ({});'.format(
+                        ', '.join(vals)))
 
-                # create table for citizens family relationship
-                await cur.execute(f'CREATE TABLE {rel_id} (x int, y int);')
-
-                # fill relations table
-                sql = ''
+                # fill relations table by rows with import_id
+                # (TODO: post-patch defence)
                 for citizen_obj in post_obj['citizens']:
                     x = citizen_obj['citizen_id']
                     for y in citizen_obj['relatives']:
-                        await cur.execute(
-                            f'INSERT INTO {rel_id} VALUES ({x}, {y});')
+                        await cur.execute('INSERT INTO relations VALUES '
+                                          f'({import_id}, {x}, {y});')
 
             await conn.commit()
 
-        response_obj = {'data': {'import_id': numeric_id}}
+        response_obj = {'data': {'import_id': import_id}}
         return web.json_response(response_obj, status=201)
 
     except Exception as e:
 
         traceback.print_exc()
 
-        # clean incomplete tables in case of error
+        # clean incomplete data in case of error
+        # TODO: check
         pool = request.config_dict['pool']
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
                 try:
-                    await cur.execute(f"DROP TABLE {import_id};")
+                    await cur.execute("DELETE FROM imports "
+                                      f"WHERE import_id = {import_id};")
                 except:
                     pass
                 try:
-                    await cur.execute(f"DROP TABLE {rel_id};")
+                    await cur.execute("DELETE FROM relations "
+                                      f"WHERE import_id = {import_id};")
                 except:
                     pass
             await conn.commit()
@@ -292,7 +281,7 @@ async def store_import(request):
         return web.json_response({'error': str(e)}, status=500)
 
 async def alter_import(request):
-    """Handle /imports/{numeric_id}/citizens/citizen_id PATCH-request"""
+    """Handle /imports/{import_id}/citizens/citizen_id PATCH-request"""
 
     try:
 
@@ -312,16 +301,14 @@ async def alter_import(request):
 
             # invert date
             if 'birth_date' in patch_obj:
-                invert_data(patch_obj)
+                invert_date(patch_obj)
 
         except IncorrectData as e:
             return web.json_response({'error': str(e)}, status=400)
 
         # inits
         pool = request.config_dict['pool']
-        numeric_id = int(request.match_info['numeric_id'])
-        import_id = 'import_' + str(numeric_id)
-        rel_id = 'rel_' + str(numeric_id)
+        import_id = int(request.match_info['import_id'])
         citizen_id = int(request.match_info['citizen_id'])
 
         async with pool.acquire() as conn:
@@ -330,7 +317,8 @@ async def alter_import(request):
 
                 # check relations
                 try:
-                    await cur.execute(f'SELECT citizen_id FROM {import_id};')
+                    await cur.execute('SELECT citizen_id FROM imports '
+                                      f'WHERE import_id = {import_id};')
                 except Exception as e:
                     return web.json_response({'error': str(e)}, status=404)
                 async for r in cur:
@@ -343,13 +331,14 @@ async def alter_import(request):
                     return web.json_response(response_obj, status=400)
 
                 # check citizen existence
-                await cur.execute(f'SELECT citizen_id FROM {import_id} ' +
-                                  f'WHERE citizen_id = {citizen_id};')
+                await cur.execute('SELECT citizen_id FROM imports '
+                                  f'WHERE import_id = {import_id} '
+                                  f'AND citizen_id = {citizen_id};')
                 if not await cur.fetchone():
                     response_obj = {'error': f'Wrong citizen_id: {citizen_id}'}
                     return web.json_response(response_obj, status=400)
 
-                # alter fields in table import_id
+                # alter fields in imports table with import_id
                 vals = []
                 for field, value in patch_obj.items():
                     if field == 'relatives':
@@ -359,31 +348,37 @@ async def alter_import(request):
                     else:
                         vals.append(f"{field} = '{value}'")
                 if vals:
-                    await cur.execute(
-                        f'UPDATE {import_id} ' +
-                        'SET {} '.format(', '.join(vals)) +
-                        f'WHERE citizen_id = {citizen_id};'
-                    )
+                    await cur.execute('UPDATE imports '
+                                      'SET {} '.format(', '.join(vals)) +
+                                      f'WHERE import_id = {import_id} '
+                                      f'AND citizen_id = {citizen_id};')
 
-                # alter relations in table import_id
+                # alter relations in table with import_id
                 # (ceate a single string for single transaction - this ensure
                 #  data correctness, if client send many requests in parallel)
                 i = citizen_id
-                sql = f'DELETE FROM {rel_id} WHERE x = {i} OR y = {i};'
+                sql = ('DELETE FROM relations '
+                       f'WHERE import_id = {import_id} '
+                       f'AND x = {i} OR y = {i};')
                 for j in patch_obj['relatives']:
-                    sql += f'INSERT INTO {rel_id} VALUES ({i}, {j});'
-                    sql += f'INSERT INTO {rel_id} VALUES ({j}, {i});'
+                    sql += ('INSERT INTO relations VALUES '
+                            f'({import_id}, {i}, {j});'
+                            'INSERT INTO relations VALUES '
+                            f'({import_id}, {j}, {i});')
                 await cur.execute(sql)
 
                 # control reading for response to client
                 try:
-                    await cur.execute(f'SELECT * FROM {import_id} ' +
-                                      f'WHERE citizen_id = {citizen_id};')
+                    fields = ', '.join(citizen_fields)
+                    await cur.execute(f'SELECT {fields} FROM imports '
+                                      f'WHERE import_id = {import_id} '
+                                      f'AND citizen_id = {citizen_id};')
                     response = await cur.fetchone()
                     citizen_obj = dict(zip(citizen_fields, response))
-                    invert_data(citizen_obj)
-                    await cur.execute(f'SELECT y FROM {rel_id} ' +
-                                      f'WHERE x = {citizen_id};')
+                    invert_date(citizen_obj)
+                    await cur.execute('SELECT y FROM relations '
+                                      f'WHERE import_id = {import_id} '
+                                      f'AND x = {citizen_id};')
                     rels = await cur.fetchone()
                     citizen_obj['relatives'] = list(rels) if rels else list()
                 except Exception as e:
@@ -399,35 +394,36 @@ async def alter_import(request):
         return web.json_response({'error': str(e)}, status=500)
 
 async def load_import(request):
-    """Handle /imports/{numeric_id}/citizens GET-request"""
+    """Handle /imports/{import_id}/citizens GET-request"""
 
     try:
 
         # inits
         pool = request.config_dict['pool']
-        numeric_id = int(request.match_info['numeric_id'])
-        import_id = 'import_' + str(numeric_id)
-        rel_id = 'rel_' + str(numeric_id)
+        import_id = int(request.match_info['import_id'])
 
         async with pool.acquire() as conn:
 
             async with conn.cursor() as cur:
 
-                # read data from import_id
+                # read data from imports table with import_id
                 try:
-                    await cur.execute(f'SELECT * FROM {import_id};')
+                    fields = ', '.join(citizen_fields)
+                    await cur.execute(f'SELECT {fields} FROM imports '
+                                      f'WHERE import_id = {import_id};')
                 except Exception as e:
                     return web.json_response({'error': str(e)}, status=404)
                 citizens_obj_list = []
                 async for r in cur:
                     citizen_obj = dict(zip(citizen_fields, r))
-                    invert_data(citizen_obj)
+                    invert_date(citizen_obj)
                     citizens_obj_list.append(citizen_obj)
                 response_obj = {'data': citizens_obj_list}
 
-                # read data from rel_id
+                # read data from relations table with import_id
                 try:
-                    await cur.execute(f'SELECT * FROM {rel_id};')
+                    await cur.execute('SELECT x, y FROM relations '
+                                      f'WHERE import_id = {import_id};')
                 except Exception as e:
                     return web.json_response({'error': str(e)}, status=404)
                 rels = dict()
@@ -450,33 +446,33 @@ async def load_import(request):
         return web.json_response({'error': str(e)}, status=500)
 
 async def load_donators_by_months(request):
-    """Handle /imports/{numeric_id}/citizens/birthdays GET-request"""
+    """Handle /imports/{import_id}/citizens/birthdays GET-request"""
 
     try:
 
         # inits
         pool = request.config_dict['pool']
-        numeric_id = int(request.match_info['numeric_id'])
-        import_id = 'import_' + str(numeric_id)
-        rel_id = 'rel_' + str(numeric_id)
+        import_id = int(request.match_info['import_id'])
 
         async with pool.acquire() as conn:
 
             async with conn.cursor() as cur:
 
-                # read data from import_id
+                # read data from imports table with import_id
                 try:
                     await cur.execute(
-                        f'SELECT citizen_id, birth_date FROM {import_id};')
+                        'SELECT citizen_id, birth_date FROM imports '
+                        f'WHERE import_id = {import_id};')
                 except Exception as e:
                     return web.json_response({'error': str(e)}, status=404)
                 id_to_info = dict()
                 async for r in cur:
                     id_to_info[r[0]] = {'bdate': r[1], 'rels': []}
 
-                # read data from rel_id
+                # read data from relations table with import_id
                 try:
-                    await cur.execute(f'SELECT * FROM {rel_id};')
+                    await cur.execute('SELECT x, y FROM relations '
+                                      f'WHERE import_id = {import_id};')
                 except Exception as e:
                     return web.json_response({'error': str(e)}, status=404)
                 async for r in cur:
@@ -507,23 +503,23 @@ async def load_donators_by_months(request):
         return web.json_response({'error': str(e)}, status=500)
 
 async def load_agestat_by_towns(request):
-    """Handle /imports/{numeric_id}/towns/stat/percentile/age GET-request"""
+    """Handle /imports/{import_id}/towns/stat/percentile/age GET-request"""
 
     try:
 
         # inits
         pool = request.config_dict['pool']
-        numeric_id = int(request.match_info['numeric_id'])
-        import_id = 'import_' + str(numeric_id)
+        import_id = int(request.match_info['import_id'])
 
         async with pool.acquire() as conn:
 
             async with conn.cursor() as cur:
 
-                # read data from import_id
+                # read data from imports table with import_id
                 try:
                     await cur.execute(
-                        f'SELECT town, birth_date FROM {import_id} ' +
+                        'SELECT town, birth_date FROM imports '
+                        f'WHERE import_id = {import_id} '
                         'ORDER BY birth_date DESC;')
                 except Exception as e:
                     return web.json_response({'error': str(e)}, status=404)
@@ -554,37 +550,71 @@ async def load_agestat_by_towns(request):
         return web.json_response({'error': str(e)}, status=500)
 
 async def init(app):
+
+    # init MySQL pool
     app['pool'] = await aiomysql.create_pool(
         host='localhost', port=3306, user='gift_server',
         password=db_password, db='gift_db', loop=loop, charset='utf8')
+
+    # create tables
+    async with app['pool'].acquire() as conn:
+        async with conn.cursor() as cur:
+
+            # create table for citizen imports
+            try:
+                await cur.execute(
+                    f'CREATE TABLE imports ('
+                        'import_id  int,'
+                        'citizen_id int,'
+                        'town       varchar(255),'
+                        'street     varchar(255),'
+                        'building   varchar(255),'
+                        'apartment  int,'
+                        'name       varchar(255),'
+                        'birth_date varchar(255),'
+                        'gender     varchar(255)'
+                    ');')
+            except:
+                pass
+
+            # create table for citizens family relationship
+            try:
+                await cur.execute(f'CREATE TABLE relations '
+                                  '(import_id int, x int, y int);')
+            except:
+                pass
+
+        await conn.commit()
+
     yield
+
     app['pool'].close()
     await app['pool'].wait_closed()
 
 def main():
 
-    global loop, glob_id, db_password
+    global loop, db_password
 
     # init globals
     loop = asyncio.get_event_loop()
     db_password = 'Qwerty!0'
-    glob_id = init_global_id()
+    init_global_id()
 
     # make application
     app = web.Application()
     app.cleanup_ctx.append(init)
     app.router.add_post('/imports', store_import)
     app.router.add_patch(
-        '/imports/{numeric_id:[0-9]+}/citizens/{citizen_id:[0-9]+}',
+        '/imports/{import_id:[0-9]+}/citizens/{citizen_id:[0-9]+}',
         alter_import
     )
-    app.router.add_get('/imports/{numeric_id:[0-9]+}/citizens', load_import)
+    app.router.add_get('/imports/{import_id:[0-9]+}/citizens', load_import)
     app.router.add_get(
-        '/imports/{numeric_id:[0-9]+}/citizens/birthdays',
+        '/imports/{import_id:[0-9]+}/citizens/birthdays',
         load_donators_by_months
     )
     app.router.add_get(
-        '/imports/{numeric_id:[0-9]+}/towns/stat/percentile/age',
+        '/imports/{import_id:[0-9]+}/towns/stat/percentile/age',
         load_agestat_by_towns
     )
 

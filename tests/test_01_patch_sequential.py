@@ -4,6 +4,14 @@
 
 import json, requests, time
 
+def order_json(obj):
+    if isinstance(obj, dict):
+        return sorted((k, order_json(v)) for k, v in obj.items())
+    if isinstance(obj, list):
+        return sorted(order_json(x) for x in obj)
+    else:
+        return obj
+
 def check_rels(citizens):
     rels = set()
     for cit in citizens:
@@ -39,7 +47,7 @@ def test_f():
     assert r.status_code == 200
     test_response = r.json()['data']
 
-    assert test_response == db_orig['citizens']
+    assert order_json(test_response) == order_json(db_orig['citizens'])
 
     # check relations correctness
     assert check_rels(db_orig['citizens'])
@@ -77,7 +85,7 @@ def test_f():
 
         # TODO: GET
         #assert check_rels(db_orig['citizens'])
-    print(time.time() - t)
+    print(round((time.time() - t)*1000, 3), 'ms ', end='')
 
 
 # TODO: в baseset добавить patch без relatives

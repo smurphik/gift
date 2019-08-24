@@ -4,6 +4,14 @@
 
 import json, requests
 
+def order_json(obj):
+    if isinstance(obj, dict):
+        return sorted((k, order_json(v)) for k, v in obj.items())
+    if isinstance(obj, list):
+        return sorted(order_json(x) for x in obj)
+    else:
+        return obj
+
 def test_f():
 
     s = requests.Session()
@@ -30,7 +38,7 @@ def test_f():
     # read sample response
     sample_response = json.load(open('data/baseset/percentile.json'))
 
-    assert test_response == sample_response
+    assert order_json(test_response) == order_json(sample_response)
 
     # PATCH wedding
     patch_request = json.load(open('data/baseset/patch_wedding.json'))
@@ -52,7 +60,7 @@ def test_f():
     # read sample response
     sample_response = json.load(open('data/baseset/db_big_family.json'))
 
-    assert test_response == sample_response
+    assert order_json(test_response) == order_json(sample_response)
 
     # GET donators distribution by months
     r = s.get(f'http://0.0.0.0:8080/imports/{import_id}/citizens/birthdays')
@@ -84,7 +92,7 @@ def test_f():
     # read sample response
     sample_response = json.load(open('data/baseset/db_finally.json'))
 
-    assert test_response == sample_response
+    assert order_json(test_response) == order_json(sample_response)
 
 if __name__ == '__main__':
     test_f()
