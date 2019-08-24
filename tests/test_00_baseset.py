@@ -2,7 +2,7 @@
 
 """Testset of small elementary requests"""
 
-import pytest, json, requests
+import json, requests
 
 def test_f():
 
@@ -32,8 +32,8 @@ def test_f():
 
     assert test_response == sample_response
 
-    # PATCH
-    patch_request = json.load(open('data/baseset/patch_request.json'))
+    # PATCH wedding
+    patch_request = json.load(open('data/baseset/patch_wedding.json'))
     r = s.patch(f'http://0.0.0.0:8080/imports/{import_id}/citizens/3',
                 json=patch_request)
     assert r.status_code == 200
@@ -64,5 +64,28 @@ def test_f():
 
     assert test_response == sample_response
 
+    # PATCH divorce
+    patch_request = json.load(open('data/baseset/patch_divorce.json'))
+    r = s.patch(f'http://0.0.0.0:8080/imports/{import_id}/citizens/3',
+                json=patch_request)
+    assert r.status_code == 200
+    test_response = r.json()['data']
+
+    # read sample response
+    sample_response = json.load(open('data/baseset/mariya_divorced.json'))
+
+    assert test_response == sample_response
+
+    # GET all in Moscow, but divorced
+    r = s.get(f'http://0.0.0.0:8080/imports/{import_id}/citizens')
+    assert r.status_code == 200
+    test_response = r.json()['data']
+
+    # read sample response
+    sample_response = json.load(open('data/baseset/db_finally.json'))
+
+    assert test_response == sample_response
+
 if __name__ == '__main__':
     test_f()
+

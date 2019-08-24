@@ -258,7 +258,7 @@ async def store_import(request):
                 # create table for citizens family relationship
                 await cur.execute(f'CREATE TABLE {rel_id} (x int, y int);')
 
-                # fill table
+                # fill relations table
                 sql = ''
                 for citizen_obj in post_obj['citizens']:
                     x = citizen_obj['citizen_id']
@@ -358,11 +358,12 @@ async def alter_import(request):
                         vals.append(f'{field} = {value}')
                     else:
                         vals.append(f"{field} = '{value}'")
-                await cur.execute(
-                    f'UPDATE {import_id} ' +
-                    'SET {} '.format(', '.join(vals)) +
-                    f'WHERE citizen_id = {citizen_id};'
-                )
+                if vals:
+                    await cur.execute(
+                        f'UPDATE {import_id} ' +
+                        'SET {} '.format(', '.join(vals)) +
+                        f'WHERE citizen_id = {citizen_id};'
+                    )
 
                 # alter relations in table import_id
                 # (ceate a single string for single transaction - this ensure
