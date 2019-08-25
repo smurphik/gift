@@ -7,7 +7,7 @@ One-thread asynchronous server for storage and analysis data on citizens
 from aiohttp import web
 import sys, os, traceback, datetime
 import aiomysql, asyncio, json, numpy
-#from time import time
+#from time import time, sleep
 
 class IncorrectData(Exception): pass
 
@@ -180,10 +180,11 @@ async def store_import(request):
         except IncorrectData as e:
             return web.json_response({'error': str(e)}, status=400)
 
-        pool = request.config_dict['pool']
+        pool = await aiomysql.create_pool(
+            host='localhost', port=3306, user='gift_server',
+            password=db_password, db='gift_db', loop=loop, charset='utf8')
 
         async with pool.acquire() as conn:
-
             async with conn.cursor() as cur:
 
                 # create unique id
@@ -214,6 +215,9 @@ async def store_import(request):
 
             await conn.commit()
 
+        pool.close()
+        await pool.wait_closed()
+
         response_obj = {'data': {'import_id': import_id}}
         return web.json_response(response_obj, status=201)
 
@@ -221,8 +225,11 @@ async def store_import(request):
 
         traceback.print_exc()
 
+        pool = await aiomysql.create_pool(
+            host='localhost', port=3306, user='gift_server',
+            password=db_password, db='gift_db', loop=loop, charset='utf8')
+
         # clean incomplete data in case of error
-        pool = request.config_dict['pool']
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
                 try:
@@ -236,6 +243,9 @@ async def store_import(request):
                 except:
                     pass
             await conn.commit()
+
+        pool.close()
+        await pool.wait_closed()
 
         return web.json_response({'error': str(e)}, status=500)
 
@@ -266,18 +276,19 @@ async def alter_import(request):
             return web.json_response({'error': str(e)}, status=400)
 
         # inits
-        pool = request.config_dict['pool']
         import_id = int(request.match_info['import_id'])
         citizen_id = int(request.match_info['citizen_id'])
+        pool = await aiomysql.create_pool(
+            host='localhost', port=3306, user='gift_server',
+            password=db_password, db='gift_db', loop=loop, charset='utf8')
 
         async with pool.acquire() as conn:
-
             async with conn.cursor() as cur:
 
                 # check data existance
                 await cur.execute(
                     f'SELECT id FROM posted_ids WHERE id = {import_id};')
-                if not await cur.fetchall():
+                if not (await cur.fetchall()):
                     return web.json_response(
                         {'error': 'Import not found'}, status=404)
 
@@ -347,6 +358,9 @@ async def alter_import(request):
 
             await conn.commit()
 
+        pool.close()
+        await pool.wait_closed()
+
         response_obj = {'data': citizen_obj}
         return web.json_response(response_obj, status=200)
 
@@ -360,17 +374,18 @@ async def load_import(request):
     try:
 
         # inits
-        pool = request.config_dict['pool']
         import_id = int(request.match_info['import_id'])
+        pool = await aiomysql.create_pool(
+            host='localhost', port=3306, user='gift_server',
+            password=db_password, db='gift_db', loop=loop, charset='utf8')
 
         async with pool.acquire() as conn:
-
             async with conn.cursor() as cur:
 
                 # check data existance
                 await cur.execute(
                     f'SELECT id FROM posted_ids WHERE id = {import_id};')
-                if not await cur.fetchall():
+                if not (await cur.fetchall()):
                     return web.json_response(
                         {'error': 'Import not found'}, status=404)
 
@@ -401,6 +416,9 @@ async def load_import(request):
                     else:
                         citizen['relatives'] = []
 
+        pool.close()
+        await pool.wait_closed()
+
         return web.json_response(response_obj, status=200)
 
     except Exception as e:
@@ -413,17 +431,18 @@ async def load_donators_by_months(request):
     try:
 
         # inits
-        pool = request.config_dict['pool']
         import_id = int(request.match_info['import_id'])
+        pool = await aiomysql.create_pool(
+            host='localhost', port=3306, user='gift_server',
+            password=db_password, db='gift_db', loop=loop, charset='utf8')
 
         async with pool.acquire() as conn:
-
             async with conn.cursor() as cur:
 
                 # check data existance
                 await cur.execute(
                     f'SELECT id FROM posted_ids WHERE id = {import_id};')
-                if not await cur.fetchall():
+                if not (await cur.fetchall()):
                     return web.json_response(
                         {'error': 'Import not found'}, status=404)
 
@@ -458,6 +477,9 @@ async def load_donators_by_months(request):
                                                          'presents': cnt})
                 response_obj = {'data': response_obj}
 
+        pool.close()
+        await pool.wait_closed()
+
         return web.json_response(response_obj, status=200)
 
     except Exception as e:
@@ -470,17 +492,18 @@ async def load_agestat_by_towns(request):
     try:
 
         # inits
-        pool = request.config_dict['pool']
         import_id = int(request.match_info['import_id'])
+        pool = await aiomysql.create_pool(
+            host='localhost', port=3306, user='gift_server',
+            password=db_password, db='gift_db', loop=loop, charset='utf8')
 
         async with pool.acquire() as conn:
-
             async with conn.cursor() as cur:
 
                 # check data existance
                 await cur.execute(
                     f'SELECT id FROM posted_ids WHERE id = {import_id};')
-                if not await cur.fetchall():
+                if not (await cur.fetchall()):
                     return web.json_response(
                         {'error': 'Import not found'}, status=404)
 
@@ -508,6 +531,9 @@ async def load_agestat_by_towns(request):
 
                 response_obj = {'data': percentiles_obj}
 
+        pool.close()
+        await pool.wait_closed()
+
         return web.json_response(response_obj, status=200)
 
     except Exception as e:
@@ -516,14 +542,15 @@ async def load_agestat_by_towns(request):
 
 async def init(app):
 
-    # init MySQL pool
-    app['pool'] = await aiomysql.create_pool(
+    pool = await aiomysql.create_pool(
         host='localhost', port=3306, user='gift_server',
         password=db_password, db='gift_db', loop=loop, charset='utf8')
 
     # create tables
-    async with app['pool'].acquire() as conn:
+    async with pool.acquire() as conn:
         async with conn.cursor() as cur:
+
+            engine = 'InnoDB' #'MyISAM'
 
             # create table for citizen imports
             try:
@@ -537,15 +564,16 @@ async def init(app):
                         'apartment  int,'
                         'name       varchar(255),'
                         'birth_date varchar(255),'
-                        'gender     varchar(255)'
-                    ');')
+                        'gender     varchar(255)) '
+                    f'ENGINE = {engine};')
             except:
                 pass
 
             # create table for citizens family relationship
             try:
                 await cur.execute(f'CREATE TABLE relations '
-                                  '(import_id int, x int, y int);')
+                                  '(import_id int, x int, y int) '
+                                  f'ENGINE = {engine};')
             except:
                 pass
 
@@ -553,7 +581,8 @@ async def init(app):
             try:
                 await cur.execute('CREATE TABLE unique_ids('
                                   'id int NOT NULL AUTO_INCREMENT, '
-                                  'PRIMARY KEY (id));')
+                                  'PRIMARY KEY (id)) '
+                                  f'ENGINE = {engine};')
             except:
                 pass
 
@@ -561,16 +590,17 @@ async def init(app):
             try:
                 await cur.execute('CREATE TABLE posted_ids('
                                   'id int NOT NULL AUTO_INCREMENT, '
-                                  'PRIMARY KEY (id));')
+                                  'PRIMARY KEY (id)) '
+                                  f'ENGINE = {engine};')
             except:
                 pass
 
         await conn.commit()
 
-    yield
+    pool.close()
+    await pool.wait_closed()
 
-    app['pool'].close()
-    await app['pool'].wait_closed()
+    yield
 
 def main():
 
