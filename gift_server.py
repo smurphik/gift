@@ -6,67 +6,21 @@ One-thread asynchronous server for storage and analysis data on citizens
 
 from aiohttp import web
 import sys, os, traceback, datetime
-import pymysql, aiomysql, asyncio, json, numpy
+import aiomysql, asyncio, json, numpy
+#from time import time
 
 class IncorrectData(Exception): pass
-
-# A shareable counter for providing unique id for data tables
-glob_id = 0
 
 citizen_fields = ['citizen_id', 'town', 'street', 'building',
                   'apartment', 'name', 'birth_date', 'gender']
 
-# This is a peculiar implementation of a shared counter using
-# variable `glob_id`, datatable `unique_ids_table` and
-# functions `init_global_id` and `update_global_id`.
-#
-# `init_global_id` - read last used id from last server run
-#                    and write it to `glob_id`
-# `update_global_id` - increment `glob_id`, save it for future
-#                      `init_global_id` and retern it
-#
-# N.B.: Of course, table `unique_ids_table` is not necessary. At the server
-# start, we can simply find the maximum index among the table names `import_X`.
-# But I think it's not very conceptual. In the future, the customer may request
-# the deletion of the data tables. Or the administrator can delete some tables
-# for some reasons. This may cause duplicating indexes for different tables on
-# the client-side. The table `unique_ids_table` helps to avoid this duplication.
-def init_global_id():
-    """Table global counter initialization"""
-
-    global glob_id
-
-    try:
-        conn = pymysql.connect(host='localhost', port=3306, user='gift_server',
-                               password=db_password, db='gift_db',
-                               autocommit=True)
-    except Exception:
-        print('FAIL: Make sure that you have configured the database '
-              '"gift_db" according to the README')
-        sys.exit()
-
-    with conn.cursor() as cursor:
-        try:
-            # read last unique id
-            cursor.execute('SELECT MAX(id) FROM unique_ids_table;')
-            max_ = int(cursor.fetchone()[0])
-            cursor.execute(f'DELETE FROM unique_ids_table WHERE id < {max_};')
-            glob_id = max_
-        except Exception:
-            # create id-table and insert zero
-            cursor.execute('CREATE TABLE unique_ids_table (id int);')
-            cursor.execute('INSERT INTO unique_ids_table VALUES(0);')
-            glob_id = 0
-
-# See comment to `init_global_id()`
-async def update_global_id(conn):
+async def create_unique_id(cursor):
     """Getting unique id for new table"""
 
-    global glob_id
-    glob_id += 1
-    async with conn.cursor() as cursor:
-        await cursor.execute(f'INSERT INTO unique_ids_table VALUES({glob_id});')
-    return glob_id
+    await cursor.execute('INSERT INTO unique_ids VALUES();')
+    await cursor.execute('SELECT LAST_INSERT_ID();')
+    r = await cursor.fetchone()
+    return r[0]
 
 class CheckRelsStruct():
     def __init__(self):
@@ -74,6 +28,9 @@ class CheckRelsStruct():
         self.relatives = set()
 
 def check_citizen_data(citizen_obj, rel_check_str, is_post=False):
+    """Check of data related to one citizen.
+    `rel_check_str` - instance of `CheckRelsStruct` class - for
+    check relations of citizen with same `import_id`"""
 
     # POST- & PATCH-specific checks
     if is_post:
@@ -227,10 +184,10 @@ async def store_import(request):
 
         async with pool.acquire() as conn:
 
-            # create unique id
-            import_id = await update_global_id(conn)
-
             async with conn.cursor() as cur:
+
+                # create unique id
+                import_id = await create_unique_id(cur)
 
                 # fill imports table by rows with import_id
                 for citizen_obj in post_obj['citizens']:
@@ -584,6 +541,14 @@ async def init(app):
             except:
                 pass
 
+            # create table for unique identifiers
+            try:
+                await cur.execute('CREATE TABLE unique_ids('
+                                  'id int NOT NULL AUTO_INCREMENT, '
+                                  'PRIMARY KEY (id));')
+            except:
+                pass
+
         await conn.commit()
 
     yield
@@ -598,7 +563,6 @@ def main():
     # init globals
     loop = asyncio.get_event_loop()
     db_password = 'Qwerty!0'
-    init_global_id()
 
     # make application
     app = web.Application()
