@@ -319,16 +319,17 @@ async def alter_import(request):
                 # alter relations in table with import_id
                 # (ceate a single string for single transaction - this ensure
                 #  data correctness, if client send many requests in parallel)
-                i = citizen_id
-                sql = ('DELETE FROM relations '
-                       f'WHERE import_id = {import_id} '
-                       f'AND x = {i} OR y = {i};')
-                for j in patch_obj['relatives']:
-                    sql += ('INSERT INTO relations VALUES '
-                            f'({import_id}, {i}, {j});'
-                            'INSERT INTO relations VALUES '
-                            f'({import_id}, {j}, {i});')
-                await cur.execute(sql)
+                if 'relatives' in patch_obj:
+                    i = citizen_id
+                    sql = ('DELETE FROM relations '
+                           f'WHERE import_id = {import_id} '
+                           f'AND x = {i} OR y = {i};')
+                    for j in patch_obj['relatives']:
+                        sql += ('INSERT INTO relations VALUES '
+                                f'({import_id}, {i}, {j});'
+                                'INSERT INTO relations VALUES '
+                                f'({import_id}, {j}, {i});')
+                    await cur.execute(sql)
 
                 # control reading citizen data for response to client
                 fields = ', '.join(citizen_fields)

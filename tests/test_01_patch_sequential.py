@@ -28,10 +28,11 @@ def check_rels(citizens):
 def test_f():
 
     s = requests.Session()
+    serv_addr = 'http://0.0.0.0:8080/imports'
 
     # POST
     db_orig = json.load(open('data/patch_sequential/writers_orig.json'))
-    r = s.post('http://0.0.0.0:8080/imports', json=db_orig)
+    r = s.post(f'{serv_addr}', json=db_orig)
     assert r.status_code == 201
     test_response = r.json()
 
@@ -43,7 +44,7 @@ def test_f():
     assert test_response == sample_response
 
     # GET
-    r = s.get(f'http://0.0.0.0:8080/imports/{import_id}/citizens')
+    r = s.get(f'{serv_addr}/{import_id}/citizens')
     assert r.status_code == 200
     test_response = r.json()['data']
 
@@ -77,18 +78,23 @@ def test_f():
                     rels.append(j)
         new_rels.append(rels)
 
-    t = time.time()
     # send PATCH requests and GET for check data correctness
+    t = time.time()
     for i, rels in enumerate(new_rels, 1):
-        # TODO: PATCH
-        pass
 
-        # TODO: GET
-        #assert check_rels(db_orig['citizens'])
-    print(round((time.time() - t)*1000, 3), 'ms ', end='')
+        # PATCH
+        r = s.patch(f'{serv_addr}/{import_id}/citizens/{i}',
+                    json={'relatives': rels})
+        assert r.status_code == 200
 
+        # GET
+        r = s.get(f'{serv_addr}/{import_id}/citizens')
+        assert r.status_code == 200
+        test_response = r.json()['data']
+        assert check_rels(test_response)
 
-# TODO: в baseset добавить patch без relatives
+    print(round(((time.time() - t)*1000)/len(new_rels), 3), 'ms ', end='')
+
 
 if __name__ == '__main__':
     test_f()
