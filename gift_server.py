@@ -202,12 +202,15 @@ async def store_import(request):
                         ', '.join(vals)))
 
                 # fill relations table by rows with import_id
-                # (TODO: post-patch defence)
                 for citizen_obj in post_obj['citizens']:
                     x = citizen_obj['citizen_id']
                     for y in citizen_obj['relatives']:
                         await cur.execute('INSERT INTO relations VALUES '
                                           f'({import_id}, {x}, {y});')
+
+                # mark import like 'posted'
+                await cur.execute(
+                    f'INSERT INTO posted_ids VALUES ({import_id});')
 
             await conn.commit()
 
@@ -219,7 +222,6 @@ async def store_import(request):
         traceback.print_exc()
 
         # clean incomplete data in case of error
-        # TODO: check
         pool = request.config_dict['pool']
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
@@ -272,12 +274,16 @@ async def alter_import(request):
 
             async with conn.cursor() as cur:
 
+                # check data existance
+                await cur.execute(
+                    f'SELECT id FROM posted_ids WHERE id = {import_id};')
+                if not await cur.fetchall():
+                    return web.json_response(
+                        {'error': 'Import not found'}, status=404)
+
                 # check relations
-                try:
-                    await cur.execute('SELECT citizen_id FROM imports '
-                                      f'WHERE import_id = {import_id};')
-                except Exception as e:
-                    return web.json_response({'error': str(e)}, status=404)
+                await cur.execute('SELECT citizen_id FROM imports '
+                                  f'WHERE import_id = {import_id};')
                 async for r in cur:
                     r = r[0]
                     if r in rels:
@@ -324,22 +330,19 @@ async def alter_import(request):
                             f'({import_id}, {j}, {i});')
                 await cur.execute(sql)
 
-                # control reading for response to client
-                try:
-                    fields = ', '.join(citizen_fields)
-                    await cur.execute(f'SELECT {fields} FROM imports '
-                                      f'WHERE import_id = {import_id} '
-                                      f'AND citizen_id = {citizen_id};')
-                    response = await cur.fetchone()
-                    citizen_obj = dict(zip(citizen_fields, response))
-                    invert_date(citizen_obj)
-                    await cur.execute('SELECT y FROM relations '
-                                      f'WHERE import_id = {import_id} '
-                                      f'AND x = {citizen_id};')
-                    rels = await cur.fetchone()
-                    citizen_obj['relatives'] = list(rels) if rels else list()
-                except Exception as e:
-                    return web.json_response({'error': str(e)}, status=404)
+                # control reading citizen data for response to client
+                fields = ', '.join(citizen_fields)
+                await cur.execute(f'SELECT {fields} FROM imports '
+                                  f'WHERE import_id = {import_id} '
+                                  f'AND citizen_id = {citizen_id};')
+                response = await cur.fetchone()
+                citizen_obj = dict(zip(citizen_fields, response))
+                invert_date(citizen_obj)
+                await cur.execute('SELECT y FROM relations '
+                                  f'WHERE import_id = {import_id} '
+                                  f'AND x = {citizen_id};')
+                rels = await cur.fetchone()
+                citizen_obj['relatives'] = list(rels) if rels else list()
 
             await conn.commit()
 
@@ -363,13 +366,17 @@ async def load_import(request):
 
             async with conn.cursor() as cur:
 
+                # check data existance
+                await cur.execute(
+                    f'SELECT id FROM posted_ids WHERE id = {import_id};')
+                if not await cur.fetchall():
+                    return web.json_response(
+                        {'error': 'Import not found'}, status=404)
+
                 # read data from imports table with import_id
-                try:
-                    fields = ', '.join(citizen_fields)
-                    await cur.execute(f'SELECT {fields} FROM imports '
-                                      f'WHERE import_id = {import_id};')
-                except Exception as e:
-                    return web.json_response({'error': str(e)}, status=404)
+                fields = ', '.join(citizen_fields)
+                await cur.execute(f'SELECT {fields} FROM imports '
+                                  f'WHERE import_id = {import_id};')
                 citizens_obj_list = []
                 async for r in cur:
                     citizen_obj = dict(zip(citizen_fields, r))
@@ -378,11 +385,8 @@ async def load_import(request):
                 response_obj = {'data': citizens_obj_list}
 
                 # read data from relations table with import_id
-                try:
-                    await cur.execute('SELECT x, y FROM relations '
-                                      f'WHERE import_id = {import_id};')
-                except Exception as e:
-                    return web.json_response({'error': str(e)}, status=404)
+                await cur.execute('SELECT x, y FROM relations '
+                                  f'WHERE import_id = {import_id};')
                 rels = dict()
                 async for r in cur:
                     i, j = r[0], r[1]
@@ -415,23 +419,23 @@ async def load_donators_by_months(request):
 
             async with conn.cursor() as cur:
 
+                # check data existance
+                await cur.execute(
+                    f'SELECT id FROM posted_ids WHERE id = {import_id};')
+                if not await cur.fetchall():
+                    return web.json_response(
+                        {'error': 'Import not found'}, status=404)
+
                 # read data from imports table with import_id
-                try:
-                    await cur.execute(
-                        'SELECT citizen_id, birth_date FROM imports '
-                        f'WHERE import_id = {import_id};')
-                except Exception as e:
-                    return web.json_response({'error': str(e)}, status=404)
+                await cur.execute('SELECT citizen_id, birth_date FROM imports '
+                                  f'WHERE import_id = {import_id};')
                 id_to_info = dict()
                 async for r in cur:
                     id_to_info[r[0]] = {'bdate': r[1], 'rels': []}
 
                 # read data from relations table with import_id
-                try:
-                    await cur.execute('SELECT x, y FROM relations '
-                                      f'WHERE import_id = {import_id};')
-                except Exception as e:
-                    return web.json_response({'error': str(e)}, status=404)
+                await cur.execute('SELECT x, y FROM relations '
+                                  f'WHERE import_id = {import_id};')
                 async for r in cur:
                     id_to_info[r[0]]['rels'].append(r[1])
 
@@ -472,14 +476,17 @@ async def load_agestat_by_towns(request):
 
             async with conn.cursor() as cur:
 
+                # check data existance
+                await cur.execute(
+                    f'SELECT id FROM posted_ids WHERE id = {import_id};')
+                if not await cur.fetchall():
+                    return web.json_response(
+                        {'error': 'Import not found'}, status=404)
+
                 # read data from imports table with import_id
-                try:
-                    await cur.execute(
-                        'SELECT town, birth_date FROM imports '
-                        f'WHERE import_id = {import_id} '
-                        'ORDER BY birth_date DESC;')
-                except Exception as e:
-                    return web.json_response({'error': str(e)}, status=404)
+                await cur.execute('SELECT town, birth_date FROM imports '
+                                  f'WHERE import_id = {import_id} '
+                                  'ORDER BY birth_date DESC;')
                 cur_date = datetime.datetime.utcnow().date()
                 town_ages_dict = {}
                 async for r in cur:
@@ -544,6 +551,14 @@ async def init(app):
             # create table for unique identifiers
             try:
                 await cur.execute('CREATE TABLE unique_ids('
+                                  'id int NOT NULL AUTO_INCREMENT, '
+                                  'PRIMARY KEY (id));')
+            except:
+                pass
+
+            # create posted import ids table
+            try:
+                await cur.execute('CREATE TABLE posted_ids('
                                   'id int NOT NULL AUTO_INCREMENT, '
                                   'PRIMARY KEY (id));')
             except:
