@@ -49,6 +49,10 @@ def check_citizen_data(citizen_obj, rel_check_str, is_post=False):
     # check every field
     for field, value in citizen_obj.items():
 
+        # incorrect field
+        if field not in citizen_fields and field != 'relatives':
+            raise IncorrectData(f"Incorrect field name: '{field}'")
+
         # check 'citizen_id', 'apartment'
         if field in {'citizen_id', 'apartment'}:
             if not (isinstance(value, int) and value >= 0):
@@ -92,12 +96,13 @@ def check_citizen_data(citizen_obj, rel_check_str, is_post=False):
 
         # other fields should be strings, ecxept 'relatives'
         if not isinstance(value, str):
-            if value in citizen_fields: # don't overlap `incorrect field` case
-                raise IncorrectData(f"Field '{field}' must be string, not " +
-                                    "{} '{}'".format(type(value), value))
+            raise IncorrectData(f"Field '{field}' must be string, not " +
+                                "{} '{}'".format(type(value), value))
 
         # check 'town', 'street', 'building'
         if field in {'town', 'street', 'building'}:
+            if not field:
+                raise IncorrectData(f"Incorrect field '{field}': '{value}'")
             for ch in value:
                 if ch.isalpha() or ch.isdigit():
                     break
@@ -106,7 +111,7 @@ def check_citizen_data(citizen_obj, rel_check_str, is_post=False):
 
         # check 'name'
         elif field == 'name':
-            if not value.strip():
+            if not value or not value.strip():
                 raise IncorrectData(f"Incorrect field '{field}': '{value}'")
 
         # check 'birth_date'
@@ -117,7 +122,9 @@ def check_citizen_data(citizen_obj, rel_check_str, is_post=False):
                 raise IncorrectData(f"Incorrect field '{field}': '{value}' " +
                                     "must be a format 'DD.MM.YYYY' string")
             if any((d > datetime.datetime.utcnow().date(),
-                    min(len(x) for x in value.split('.')) < 2)):
+                    len(value.split('.')[0]) != 2,
+                    len(value.split('.')[1]) != 2,
+                    len(value.split('.')[2]) != 4)):
                 raise IncorrectData(f"Incorrect field '{field}': '{value}' " +
                                     "must be a format 'DD.MM.YYYY' string")
 
@@ -128,7 +135,7 @@ def check_citizen_data(citizen_obj, rel_check_str, is_post=False):
 
         # incorrect field
         else:
-            raise IncorrectData(f"Incorrect field name: '{field}'")
+            raise IncorrectData(f"#Incorrect field name: '{field}'")
 
 def invert_date(citizen_obj):
     """Convert field \"date\" 'DD.MM.YYYY' -> 'YYYY.MM.DD' or back"""
@@ -317,7 +324,7 @@ async def alter_import(request):
                                   f'AND citizen_id = {citizen_id};')
                 if not await cur.fetchone():
                     response_obj = {'error': f'Wrong citizen_id: {citizen_id}'}
-                    return web.json_response(response_obj, status=400)
+                    return web.json_response(response_obj, status=404)
 
                 # alter fields in imports table with import_id
                 vals = []
@@ -573,6 +580,8 @@ async def init(app):
                         'birth_date varchar(255),'
                         'gender     varchar(255)) '
                     f'ENGINE = {engine};')
+                await cur.execute(f'CREATE INDEX id_index '
+                                  'ON imports (import_id);')
             except:
                 pass
 
@@ -581,6 +590,8 @@ async def init(app):
                 await cur.execute(f'CREATE TABLE relations '
                                   '(import_id int, x int, y int) '
                                   f'ENGINE = {engine};')
+                await cur.execute(f'CREATE INDEX id_index '
+                                  'ON relations (import_id);')
             except:
                 pass
 
