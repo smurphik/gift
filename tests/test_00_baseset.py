@@ -1,6 +1,6 @@
 #! /usr/bin/env python3
 
-"""Testset of small elementary requests"""
+"""Testset of small ordinary sequential requests without special cases"""
 
 import json, requests
 

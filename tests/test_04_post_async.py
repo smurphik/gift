@@ -1,6 +1,6 @@
 #! /usr/bin/env python3
 
-"""Testset of many asynchronous PATCH requests"""
+"""Testset of serveral asynchronous POST requests"""
 
 import json, requests, time, asyncio, aiohttp
 

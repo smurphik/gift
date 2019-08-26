@@ -155,7 +155,7 @@ async def store_import(request):
         try:
             post_obj = await request.json()
         except Exception as e:
-            response_obj = {'error': 'Incorrect JSON-object'}
+            response_obj = {'error': f'Incorrect JSON-object: {e}'}
             return web.json_response(response_obj, status=400)
 
         # check data correctness & invert date (dd.mm.yyyy -> yyyy.mm.dd)
@@ -261,7 +261,7 @@ async def alter_import(request):
         try:
             patch_obj = await request.json()
         except Exception as e:
-            response_obj = {'error': 'Incorrect JSON-object'}
+            response_obj = {'error': f'Incorrect JSON-object: {e}'}
             return web.json_response(response_obj, status=400)
 
         # check data correctness
@@ -618,7 +618,7 @@ def main():
     db_password = 'Qwerty!0'
 
     # make application
-    app = web.Application()
+    app = web.Application(client_max_size = 1024*1024*10)
     app.cleanup_ctx.append(init)
     app.router.add_post('/imports', store_import)
     app.router.add_patch(
