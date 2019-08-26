@@ -69,7 +69,7 @@ def test_f():
 
     # read sample response
     sample_response = json.load(open('data/baseset/months_distr.json'))
-    assert test_response == sample_response
+    assert order_json(test_response) == order_json(sample_response)
 
 
     # PATCH divorce

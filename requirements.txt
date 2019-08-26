@@ -1,7 +1,6 @@
 aiohttp
 aiomysql
 asyncio
-pymysql<=0.9.2,>=0.9
 pytest
 numpy
-configparser
+requests

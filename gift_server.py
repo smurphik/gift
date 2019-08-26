@@ -74,10 +74,14 @@ def check_citizen_data(citizen_obj, rel_check_str, is_post=False):
                 if is_post:
                     # for POST-request save tuples:
                     # {(citizen_id, relation0), (citizen_id, relation1), ...}
-                    rel_pair = (citizen_obj['citizen_id'], rel)
-                    if rel_pair in rel_check_str.relatives:
-                        raise IncorrectData(f"Duplicated relation: {rel_pair}")
-                    rel_check_str.relatives.add(rel_pair)
+                    cit = citizen_obj['citizen_id']
+                    if cit != rel:
+                        # ordinary case (not relative to himself case)
+                        rel_pair = (cit, rel)
+                        if rel_pair in rel_check_str.relatives:
+                            raise IncorrectData(
+                                f"Duplicated relation: {rel_pair}")
+                        rel_check_str.relatives.add(rel_pair)
                 else:
                     # for PATCH-request save just id of relations:
                     # {relation0, relation1, ...}
@@ -295,6 +299,9 @@ async def alter_import(request):
                 # check relations
                 await cur.execute('SELECT citizen_id FROM imports '
                                   f'WHERE import_id = {import_id};')
+                if citizen_id in rels:
+                    # for the relative himself case
+                    rels.remove(citizen_id)
                 async for r in cur:
                     r = r[0]
                     if r in rels:

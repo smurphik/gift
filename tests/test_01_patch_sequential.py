@@ -2,7 +2,8 @@
 
 """Testset of many sequential PATCH requests"""
 
-import json, requests, time
+import json, requests
+from time import time
 
 def order_json(obj):
     if isinstance(obj, dict):
@@ -53,7 +54,7 @@ def test_f():
     # check relations correctness
     assert check_rels(db_orig['citizens'])
 
-    # decide new relations
+    # decide new relations (pseudorandom changes)
     new_rels = []
     N = len(db_orig['citizens'])
     for i in range(1, N+1):
@@ -79,13 +80,18 @@ def test_f():
         new_rels.append(rels)
 
     # send PATCH requests and GET for check data correctness
-    t = time.time()
+    t_patch = t_get = 0
     for i, rels in enumerate(new_rels, 1):
+
+        t = time()
 
         # PATCH
         r = s.patch(f'{serv_addr}/{import_id}/citizens/{i}',
                     json={'relatives': rels})
         assert r.status_code == 200
+
+        t_patch += (time() - t)
+        t = time()
 
         # GET
         r = s.get(f'{serv_addr}/{import_id}/citizens')
@@ -93,7 +99,12 @@ def test_f():
         test_response = r.json()['data']
         assert check_rels(test_response)
 
-    print(round(((time.time() - t)*1000)/len(new_rels), 3), 'ms ', end='')
+        t_get += (time() - t)
+
+    t_patch = t_patch*1000/len(new_rels)
+    t_get   =   t_get*1000/len(new_rels)
+    print('patch: {} ms, get: {} ms '.format(
+        round(t_patch, 3), round(t_get, 3)), end='')
 
 
 if __name__ == '__main__':

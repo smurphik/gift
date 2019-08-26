@@ -70,7 +70,7 @@ def test_f():
     # check relations correctness
     assert check_rels(db_orig['citizens'])
 
-    # decide new relations
+    # decide new relations (pseudorandom changes)
     new_rels = []
     N = len(db_orig['citizens'])
     for i in range(1, N+1):
@@ -99,11 +99,12 @@ def test_f():
     t = time.time()
     addr = f'{serv_addr}/{import_id}'
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.new_event_loop()
     loop.run_until_complete(batch_patch_get(new_rels, addr))
     loop.close()
 
-    print(round(((time.time() - t)*1000)/len(new_rels), 3), 'ms ', end='')
+    print('patch+get:', round(((time.time() - t)*1000)/len(new_rels), 3),
+          'ms ', end='')
 
 
 if __name__ == '__main__':

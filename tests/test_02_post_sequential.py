@@ -32,7 +32,7 @@ def test_f():
     t = time.time()
     for _ in range(10):
         make_post(db_orig, s)
-    print(round((time.time() - t)*100, 3), 'ms ', end='')
+    print('post:', round((time.time() - t)*100, 3), 'ms ', end='')
 
 if __name__ == '__main__':
     test_f()
