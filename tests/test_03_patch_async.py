@@ -29,6 +29,8 @@ async def patch_get(cit, rels, addr, s):
 
     # PATCH
     r = await s.patch(f'{addr}/citizens/{cit}', json={'relatives': rels})
+    if r.status == 500:
+        print(await r.json())
     assert r.status == 200
 
     # GET

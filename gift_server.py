@@ -348,7 +348,7 @@ async def alter_import(request):
                     i = citizen_id
                     sql = ('DELETE FROM relations '
                            f'WHERE import_id = {import_id} '
-                           f'AND x = {i} OR y = {i};')
+                           f'AND (x = {i} OR y = {i});')
                     for j in patch_obj['relatives']:
                         sql += ('INSERT INTO relations VALUES '
                                 f'({import_id}, {i}, {j});'
