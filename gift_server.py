@@ -5,14 +5,20 @@ One-thread asynchronous server for storage and analysis data on citizens
 """
 
 from aiohttp import web
-import sys, os, traceback, datetime
-import aiomysql, asyncio, json, numpy
-#from time import time, sleep
+import traceback
+import datetime
+import aiomysql
+import asyncio
+import numpy
 
-class IncorrectData(Exception): pass
+
+class IncorrectData(Exception):
+    pass
+
 
 citizen_fields = ['citizen_id', 'town', 'street', 'building',
                   'apartment', 'name', 'birth_date', 'gender']
+
 
 async def create_unique_id(cursor):
     """Getting unique id for new table"""
@@ -22,10 +28,12 @@ async def create_unique_id(cursor):
     r = await cursor.fetchone()
     return r[0]
 
+
 class CheckRelsStruct():
     def __init__(self):
         self.citizens = set()
         self.relatives = set()
+
 
 def check_citizen_data(citizen_obj, rel_check_str, is_post=False):
     """Check of data related to one citizen.
@@ -62,7 +70,7 @@ def check_citizen_data(citizen_obj, rel_check_str, is_post=False):
             if field == 'citizen_id':
                 if value in rel_check_str.citizens:
                     raise IncorrectData(
-                        f"Duplicated citizen with id '{citizen_id}'")
+                        f"Duplicated citizen with id '{value}'")
                 rel_check_str.citizens.add(value)
             continue
 
@@ -118,7 +126,7 @@ def check_citizen_data(citizen_obj, rel_check_str, is_post=False):
         elif field == 'birth_date':
             try:
                 d = datetime.date(*(int(i) for i in value.split('.')[::-1]))
-            except:
+            except Exception:
                 raise IncorrectData(f"Incorrect field '{field}': '{value}' " +
                                     "must be a format 'DD.MM.YYYY' string")
             if any((d > datetime.datetime.utcnow().date(),
@@ -137,12 +145,14 @@ def check_citizen_data(citizen_obj, rel_check_str, is_post=False):
         else:
             raise IncorrectData(f"#Incorrect field name: '{field}'")
 
+
 def invert_date(citizen_obj):
     """Convert field \"date\" 'DD.MM.YYYY' -> 'YYYY.MM.DD' or back"""
     fields = citizen_obj['birth_date'].split('.')[::-1]
     fields = list(map(str.strip, fields))
-    #fields = list(map(lambda s: s.zfill(2) if len(s) == 1 else s, fields))
+    # fields = list(map(lambda s: s.zfill(2) if len(s) == 1 else s, fields))
     citizen_obj['birth_date'] = '.'.join(fields)
+
 
 def sub_years(x, y):
     """date x, date y -> years delta between x and y"""
@@ -153,6 +163,7 @@ def sub_years(x, y):
         if x.day < y.day:
             delta -= 1
     return delta
+
 
 async def store_import(request):
     """Handle /imports POST-request"""
@@ -246,12 +257,12 @@ async def store_import(request):
                 try:
                     await cur.execute("DELETE FROM imports "
                                       f"WHERE import_id = {import_id};")
-                except:
+                except Exception:
                     pass
                 try:
                     await cur.execute("DELETE FROM relations "
                                       f"WHERE import_id = {import_id};")
-                except:
+                except Exception:
                     pass
             await conn.commit()
 
@@ -259,6 +270,7 @@ async def store_import(request):
         await pool.wait_closed()
 
         return web.json_response({'error': str(e)}, status=500)
+
 
 async def alter_import(request):
     """Handle /imports/{import_id}/citizens/citizen_id PATCH-request"""
@@ -382,6 +394,7 @@ async def alter_import(request):
         traceback.print_exc()
         return web.json_response({'error': str(e)}, status=500)
 
+
 async def load_import(request):
     """Handle /imports/{import_id}/citizens GET-request"""
 
@@ -438,6 +451,7 @@ async def load_import(request):
     except Exception as e:
         traceback.print_exc()
         return web.json_response({'error': str(e)}, status=500)
+
 
 async def load_donators_by_months(request):
     """Handle /imports/{import_id}/citizens/birthdays GET-request"""
@@ -500,6 +514,7 @@ async def load_donators_by_months(request):
         traceback.print_exc()
         return web.json_response({'error': str(e)}, status=500)
 
+
 async def load_agestat_by_towns(request):
     """Handle /imports/{import_id}/towns/stat/percentile/age GET-request"""
 
@@ -554,6 +569,7 @@ async def load_agestat_by_towns(request):
         traceback.print_exc()
         return web.json_response({'error': str(e)}, status=500)
 
+
 async def init(app):
 
     pool = await aiomysql.create_pool(
@@ -564,7 +580,7 @@ async def init(app):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
 
-            engine = 'InnoDB' #'MyISAM'
+            engine = 'InnoDB'  # 'MyISAM'
 
             # create table for citizen imports
             try:
@@ -582,7 +598,7 @@ async def init(app):
                     f'ENGINE = {engine};')
                 await cur.execute(f'CREATE INDEX id_index '
                                   'ON imports (import_id);')
-            except:
+            except Exception:
                 pass
 
             # create table for citizens family relationship
@@ -592,7 +608,7 @@ async def init(app):
                                   f'ENGINE = {engine};')
                 await cur.execute(f'CREATE INDEX id_index '
                                   'ON relations (import_id);')
-            except:
+            except Exception:
                 pass
 
             # create table for unique identifiers
@@ -601,7 +617,7 @@ async def init(app):
                                   'id int NOT NULL AUTO_INCREMENT, '
                                   'PRIMARY KEY (id)) '
                                   f'ENGINE = {engine};')
-            except:
+            except Exception:
                 pass
 
             # create posted import ids table
@@ -610,7 +626,7 @@ async def init(app):
                                   'id int NOT NULL AUTO_INCREMENT, '
                                   'PRIMARY KEY (id)) '
                                   f'ENGINE = {engine};')
-            except:
+            except Exception:
                 pass
 
         await conn.commit()
@@ -619,6 +635,7 @@ async def init(app):
     await pool.wait_closed()
 
     yield
+
 
 def main():
 
@@ -629,7 +646,7 @@ def main():
     db_password = 'Qwerty!0'
 
     # make application
-    app = web.Application(client_max_size = 1024*1024*10)
+    app = web.Application(client_max_size=1024*1024*10)
     app.cleanup_ctx.append(init)
     app.router.add_post('/imports', store_import)
     app.router.add_patch(
@@ -649,6 +666,6 @@ def main():
     # run
     web.run_app(app)
 
+
 if __name__ == "__main__":
     main()
-
