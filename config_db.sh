@@ -4,8 +4,8 @@
 db_password="Qwerty!0"
 #echo
 text="CREATE DATABASE gift_db CHARACTER SET utf8;
-     GRANT ALL PRIVILEGES ON *.* TO 'gift_server'@'localhost' IDENTIFIED BY
-     '$db_password';"
+     CREATE USER 'gift_server'@'localhost' IDENTIFIED BY '$db_password';
+     GRANT ALL PRIVILEGES ON *.* TO 'gift_server'@'localhost' WITH GRANT OPTION;"
 echo "Try connect to MySQL as root..."
 echo "(your root-password on this host may be required)"
 echo "$text" | sudo mysql -u root
