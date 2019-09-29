@@ -16,8 +16,8 @@ class IncorrectData(Exception):
     pass
 
 
-citizen_fields = ['citizen_id', 'town', 'street', 'building',
-                  'apartment', 'name', 'birth_date', 'gender']
+CITIZEN_FIELDS = ('citizen_id', 'town', 'street', 'building',
+                  'apartment', 'name', 'birth_date', 'gender')
 
 
 async def create_unique_id(cursor):
@@ -58,7 +58,7 @@ def check_citizen_data(citizen_obj, rel_check_str, is_post=False):
     for field, value in citizen_obj.items():
 
         # incorrect field
-        if field not in citizen_fields and field != 'relatives':
+        if field not in CITIZEN_FIELDS and field != 'relatives':
             raise IncorrectData(f"Incorrect field name: '{field}'")
 
         # check 'citizen_id', 'apartment'
@@ -217,7 +217,7 @@ async def store_import(request):
                         '(%s, %s, %s, %s, %s, %s, %s, %s, %s);')
                 for citizen_obj in post_obj['citizens']:
                     vals = [import_id]
-                    vals += [citizen_obj[f] for f in citizen_fields]
+                    vals += [citizen_obj[f] for f in CITIZEN_FIELDS]
                     await cur.execute(text, vals)
 
                 # fill relations table by rows with import_id
@@ -363,12 +363,12 @@ async def alter_import(request):
                                           (import_id, i, j, import_id, j, i))
 
                 # control reading citizen data for response to client
-                fields = ', '.join(citizen_fields)
+                fields = ', '.join(CITIZEN_FIELDS)
                 text = (f'SELECT {fields} FROM imports '
                         'WHERE import_id = %s AND citizen_id = %s;')
                 await cur.execute(text, (import_id, citizen_id))
                 response = await cur.fetchone()
-                citizen_obj = dict(zip(citizen_fields, response))
+                citizen_obj = dict(zip(CITIZEN_FIELDS, response))
                 invert_date(citizen_obj)
                 text = ('SELECT y FROM relations '
                         'WHERE import_id = %s AND x = %s;')
@@ -411,12 +411,12 @@ async def load_import(request):
                     return web.json_response(response_obj, status=404)
 
                 # read data from imports table with import_id
-                fields = ', '.join(citizen_fields)
+                fields = ', '.join(CITIZEN_FIELDS)
                 text = f'SELECT {fields} FROM imports WHERE import_id = %s;'
                 await cur.execute(text, import_id)
                 citizens_obj_list = []
                 async for r in cur:
-                    citizen_obj = dict(zip(citizen_fields, r))
+                    citizen_obj = dict(zip(CITIZEN_FIELDS, r))
                     invert_date(citizen_obj)
                     citizens_obj_list.append(citizen_obj)
                 response_obj = {'data': citizens_obj_list}
