@@ -2,11 +2,10 @@ REST API сервис для хранения и анализа данных о 
 
 ### Install
 
-В первую очередь, необходимо установить MySQL сервер:
+В первую очередь, необходимо установить PostgreSQL сервер:
 
     $ sudo apt-get update
-    $ sudo apt-get install mysql-server
-    $ sudo apt-get install mysql-client
+    $ sudo apt-get install postgresql postgresql-contrib
 
 Устанавливаем сервер подарков (если на машине не установлен `git`, можно установить его или скачать содержимое репозитория, используя интерфейс github.com):
 
@@ -32,9 +31,9 @@ REST API сервис для хранения и анализа данных о 
 
 N.B. Тестирование оставляет после себя мусорные данные в базе. Для того чтобы почистить базу, нужно остановить сервер и выполнить:
 
-    $ mysql -u gift_server -p
-    mysql> DROP DATABASE gift_db; CREATE DATABASE gift_db CHARACTER SET utf8;
-    mysql> \q
+    $ sudo -i -u postgres psql -d gift_db
+    gift_db=# TRUNCATE imports, relations, unique_ids, posted_ids;
+    gift_db=# \q
 
 ### Autorun
 

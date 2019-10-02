@@ -1,5 +1,6 @@
 aiohttp
-aiomysql
+gino
+sqlalchemy
 asyncio
 pytest
 numpy

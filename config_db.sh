@@ -1,17 +1,12 @@
 #! /usr/bin/env bash
 
 #read -s -p "Create a password for datebase: " db_password
-db_password="Qwerty!0"
-#echo
-text="CREATE DATABASE gift_db CHARACTER SET utf8;
-     CREATE USER 'gift_server'@'localhost' IDENTIFIED BY '$db_password';
-     GRANT ALL PRIVILEGES ON *.* TO 'gift_server'@'localhost' WITH GRANT OPTION;"
-echo "Try connect to MySQL as root..."
-echo "(your root-password on this host may be required)"
-echo "$text" | sudo mysql -u root
+db_password="Qwerty?0"
+sudo -i -u postgres psql -c "CREATE USER gift_server PASSWORD '$db_password';"
+sudo -i -u postgres psql -c "CREATE DATABASE gift_db;"
 
-echo "[runner]" > ~/.gift.cfg
-echo "db_password = $db_password" >> ~/.gift.cfg
+#echo "[runner]" > ~/.gift.cfg
+#echo "db_password = $db_password" >> ~/.gift.cfg
 
 echo "Success!"
 

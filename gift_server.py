@@ -7,29 +7,75 @@ One-thread asynchronous server for storage and analysis data on citizens
 from aiohttp import web
 import traceback
 import datetime
-import aiomysql
 import asyncio
 import numpy
+from gino import Gino
+from sqlalchemy import and_, or_
+
+CITIZEN_FIELDS = ('citizen_id', 'town', 'street', 'building',
+                  'apartment', 'name', 'birth_date', 'gender')
+db = Gino()
 
 
 class IncorrectData(Exception):
     pass
 
 
-CITIZEN_FIELDS = ('citizen_id', 'town', 'street', 'building',
-                  'apartment', 'name', 'birth_date', 'gender')
+class Imports(db.Model):
+    """Table with common data about citizens"""
+
+    __tablename__ = 'imports'
+
+    import_id = db.Column(db.Integer())
+    citizen_id = db.Column(db.Integer())
+    town = db.Column(db.Unicode())
+    street = db.Column(db.Unicode())
+    building = db.Column(db.Unicode())
+    apartment = db.Column(db.Integer())
+    name = db.Column(db.Unicode())
+    birth_date = db.Column(db.Unicode())
+    gender = db.Column(db.Unicode())
+
+    _idx1 = db.Index('imps_import_id_idx', 'import_id')
 
 
-async def create_unique_id(cursor):
+class Relations(db.Model):
+    """Table with family relationships data"""
+
+    __tablename__ = 'relations'
+
+    import_id = db.Column(db.Integer())
+    x = db.Column(db.Integer())
+    y = db.Column(db.Integer())
+
+    _idx1 = db.Index('rels_import_id_idx', 'import_id')
+
+
+class UniqueIds(db.Model):
+    """Table with unique identifiers of import tables"""
+
+    __tablename__ = 'unique_ids'
+
+    id = db.Column(db.Integer(), primary_key=True)
+
+
+class PostedIds(db.Model):
+    """Table with identifiers of posted imports"""
+
+    __tablename__ = 'posted_ids'
+
+    id = db.Column(db.Integer(), primary_key=True)
+
+
+async def create_unique_id():
     """Getting unique id for new table"""
 
-    await cursor.execute('INSERT INTO unique_ids VALUES();')
-    await cursor.execute('SELECT LAST_INSERT_ID();')
-    r = await cursor.fetchone()
-    return r[0]
+    row = await UniqueIds.create()
+    return row.id
 
 
 class CheckRelsStruct():
+    """Auxiliary structure for user data check"""
     def __init__(self):
         self.citizens = set()
         self.relatives = set()
@@ -44,11 +90,6 @@ def check_citizen_data(citizen_obj, rel_check_str, is_post=False):
     if is_post:
         if len(citizen_obj) != 9:
             raise IncorrectData(f'Too few fields for citizen {citizen_obj}')
-        # N.B.: It's a pity, but the standard expression `assert` here and in
-        # many other places is risky, because the code can be run in optimized
-        # mode. To implement own function `Assert` is also not desirable,
-        # because that will create a lot of unnecessary strings. So, code
-        # consist many bulky if-raise combinations
     else:
         if 'citizen_id' in citizen_obj:
             raise IncorrectData(
@@ -150,7 +191,6 @@ def invert_date(citizen_obj):
     """Convert field \"date\" 'DD.MM.YYYY' -> 'YYYY.MM.DD' or back"""
     fields = citizen_obj['birth_date'].split('.')[::-1]
     fields = list(map(str.strip, fields))
-    # fields = list(map(lambda s: s.zfill(2) if len(s) == 1 else s, fields))
     citizen_obj['birth_date'] = '.'.join(fields)
 
 
@@ -202,39 +242,25 @@ async def store_import(request):
         except IncorrectData as e:
             return web.json_response({'error': str(e)}, status=400)
 
-        pool = await aiomysql.create_pool(
-            host='localhost', port=3306, user='gift_server',
-            password=db_password, db='gift_db', loop=loop, charset='utf8')
+        # create unique id
+        import_id = await create_unique_id()
 
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cur:
+        # fill imports table by rows with import_id
+        async with db.transaction():
+            for citizen_obj in post_obj['citizens']:
+                await Imports.create(
+                    import_id=import_id,
+                    **{f: citizen_obj[f] for f in CITIZEN_FIELDS})
 
-                # create unique id
-                import_id = await create_unique_id(cur)
+        # fill relations table by rows with import_id
+        async with db.transaction():
+            for citizen_obj in post_obj['citizens']:
+                x = citizen_obj['citizen_id']
+                for y in citizen_obj['relatives']:
+                    await Relations.create(import_id=import_id, x=x, y=y)
 
-                # fill imports table by rows with import_id
-                text = ('INSERT INTO imports VALUES '
-                        '(%s, %s, %s, %s, %s, %s, %s, %s, %s);')
-                for citizen_obj in post_obj['citizens']:
-                    vals = [import_id]
-                    vals += [citizen_obj[f] for f in CITIZEN_FIELDS]
-                    await cur.execute(text, vals)
-
-                # fill relations table by rows with import_id
-                text = 'INSERT INTO relations VALUES (%s, %s, %s);'
-                for citizen_obj in post_obj['citizens']:
-                    x = citizen_obj['citizen_id']
-                    for y in citizen_obj['relatives']:
-                        await cur.execute(text, (import_id, x, y))
-
-                # mark import like 'posted'
-                await cur.execute('INSERT INTO posted_ids VALUES (%s);',
-                                  import_id)
-
-            await conn.commit()
-
-        pool.close()
-        await pool.wait_closed()
+        # mark import like 'posted'
+        await PostedIds.create(id=import_id)
 
         response_obj = {'data': {'import_id': import_id}}
         return web.json_response(response_obj, status=201)
@@ -243,33 +269,17 @@ async def store_import(request):
 
         traceback.print_exc()
 
-        pool = await aiomysql.create_pool(
-            host='localhost', port=3306, user='gift_server',
-            password=db_password, db='gift_db', loop=loop, charset='utf8')
-
-        # clean incomplete data in case of error
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                try:
-                    await cur.execute('DELETE FROM imports '
-                                      'WHERE import_id = %s;', import_id)
-                except Exception:
-                    pass
-                try:
-                    await cur.execute('DELETE FROM relations '
-                                      'WHERE import_id = %s;', import_id)
-                except Exception:
-                    pass
-            await conn.commit()
-
-        pool.close()
-        await pool.wait_closed()
+        try:
+            await Imports.delete.where(Imports.import_id == import_id)
+            await Relations.delete.where(Imports.import_id == import_id)
+        except Exception:
+            pass
 
         return web.json_response({'error': str(e)}, status=500)
 
 
 async def alter_import(request):
-    """Handle /imports/{import_id}/citizens/citizen_id PATCH-request"""
+    """Handle /imports/{import_id}/citizens/{citizen_id} PATCH-request"""
 
     try:
 
@@ -285,7 +295,7 @@ async def alter_import(request):
             # check all fields except 'relations'
             rel_check_str = CheckRelsStruct()
             check_citizen_data(patch_obj, rel_check_str)
-            rels = rel_check_str.relatives
+            relations = rel_check_str.relatives
 
             # invert date
             if 'birth_date' in patch_obj:
@@ -297,89 +307,73 @@ async def alter_import(request):
         # inits
         import_id = int(request.match_info['import_id'])
         citizen_id = int(request.match_info['citizen_id'])
-        pool = await aiomysql.create_pool(
-            host='localhost', port=3306, user='gift_server',
-            password=db_password, db='gift_db', loop=loop, charset='utf8')
 
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cur:
+        # check data existance
+        row = await PostedIds.query.where(
+            PostedIds.id == import_id).gino.scalar()
+        if not row:
+            response_obj = {'error': 'Import not found'}
+            return web.json_response(response_obj, status=404)
 
-                # check data existance
-                await cur.execute(
-                    'SELECT id FROM posted_ids WHERE id = %s;', import_id)
-                if not (await cur.fetchall()):
-                    response_obj = {'error': 'Import not found'}
-                    return web.json_response(response_obj, status=404)
+        # check relations (part 2 - check existance of relatives in import)
+        rows = await Imports.select('citizen_id').where(
+            Imports.import_id == import_id).gino.all()
+        for row in rows:
+            cit_id = row[0]
+            if cit_id in relations:
+                relations.remove(cit_id)
+        if relations:
+            response_obj = {'error': 'Wrong relations: {}'.format(
+                [(citizen_id, r) for r in relations])}
+            return web.json_response(response_obj, status=400)
 
-                # check relations
-                await cur.execute('SELECT citizen_id FROM imports '
-                                  'WHERE import_id = %s;', import_id)
-                if citizen_id in rels:
-                    # for the relative himself case
-                    rels.remove(citizen_id)
-                async for r in cur:
-                    r = r[0]
-                    if r in rels:
-                        rels.remove(r)
-                if rels:
-                    response_obj = {'error': 'Wrong relations: {}'.format(
-                        [(citizen_id, r) for r in rels])}
-                    return web.json_response(response_obj, status=400)
+        # check citizen existence
+        citizen = await Imports.query.where(
+            and_(Imports.import_id == import_id,
+                 Imports.citizen_id == citizen_id)).gino.scalar()
+        if not citizen:
+            response_obj = {'error': f'Wrong citizen_id: {citizen_id}'}
+            return web.json_response(response_obj, status=404)
 
-                # check citizen existence
-                await cur.execute('SELECT citizen_id FROM imports '
-                                  'WHERE import_id = %s AND citizen_id = %s;',
-                                  (import_id, citizen_id))
-                if not await cur.fetchone():
-                    response_obj = {'error': f'Wrong citizen_id: {citizen_id}'}
-                    return web.json_response(response_obj, status=404)
+        # prepare data for alter imports table
+        patch_norel_obj = dict(patch_obj)
+        if 'relatives' in patch_norel_obj:
+            del patch_norel_obj['relatives']
 
-                # alter fields in imports table with import_id
-                pairs = []
-                vals = []
-                for field, value in patch_obj.items():
-                    if field == 'relatives':
-                        continue
-                    pairs.append(f'{field} = %s')
-                    vals.append(value)
-                if vals:
-                    text = ('UPDATE imports SET {} '.format(', '.join(pairs)) +
-                            'WHERE import_id = %s AND citizen_id = %s;')
-                    await cur.execute(text, vals + [import_id, citizen_id])
+        # change data transaction
+        async with db.transaction():
 
-                # alter relations in table with import_id
-                # (ceate a single string for single transaction - this ensure
-                #  data correctness, if client send many requests in parallel)
-                if 'relatives' in patch_obj:
-                    i = citizen_id
-                    text = ('DELETE FROM relations '
-                            'WHERE import_id = %s '
-                            'AND (x = %s OR y = %s);')
-                    await cur.execute(text, (import_id, i, i))
-                    text = ('INSERT INTO relations VALUES (%s, %s, %s);'
-                            'INSERT INTO relations VALUES (%s, %s, %s);')
-                    for j in patch_obj['relatives']:
-                        await cur.execute(text,
-                                          (import_id, i, j, import_id, j, i))
+            # alter fields in imports table with import_id
+            if patch_norel_obj:
+                await Imports.update.values(**patch_norel_obj).where(
+                    and_(Imports.import_id == import_id,
+                         Imports.citizen_id == citizen_id)).gino.status()
 
-                # control reading citizen data for response to client
-                fields = ', '.join(CITIZEN_FIELDS)
-                text = (f'SELECT {fields} FROM imports '
-                        'WHERE import_id = %s AND citizen_id = %s;')
-                await cur.execute(text, (import_id, citizen_id))
-                response = await cur.fetchone()
-                citizen_obj = dict(zip(CITIZEN_FIELDS, response))
-                invert_date(citizen_obj)
-                text = ('SELECT y FROM relations '
-                        'WHERE import_id = %s AND x = %s;')
-                await cur.execute(text, (import_id, citizen_id))
-                rels = await cur.fetchone()
-                citizen_obj['relatives'] = list(rels) if rels else list()
+            # alter relations in table with import_id
+            # (ceate a single string for single transaction - this ensure
+            #  data correctness, if client send many requests in parallel)
+            if 'relatives' in patch_obj:
+                i = citizen_id
+                await Relations.delete.where(
+                    and_(Relations.import_id == import_id,
+                         or_(Relations.x == i,
+                             Relations.y == i))).gino.status()
+                for j in patch_obj['relatives']:
+                    await Relations.create(import_id=import_id, x=i, y=j)
+                    if i != j:
+                        await Relations.create(import_id=import_id, x=j, y=i)
 
-            await conn.commit()
-
-        pool.close()
-        await pool.wait_closed()
+        # control reading citizen data for response to client
+        rows = await Imports.select(*CITIZEN_FIELDS).where(
+            and_(Imports.import_id == import_id,
+                 Imports.citizen_id == citizen_id)).gino.all()
+        citizen_obj = dict(zip(CITIZEN_FIELDS, rows[0]))
+        invert_date(citizen_obj)
+        rows = await Relations.select('y').where(
+            and_(Relations.import_id == import_id,
+                 Relations.x == citizen_id)).gino.all()
+        rels = [row[0] for row in rows]
+        citizen_obj['relatives'] = list(rels) if rels else list()
 
         response_obj = {'data': citizen_obj}
         return web.json_response(response_obj, status=200)
@@ -396,49 +390,39 @@ async def load_import(request):
 
         # inits
         import_id = int(request.match_info['import_id'])
-        pool = await aiomysql.create_pool(
-            host='localhost', port=3306, user='gift_server',
-            password=db_password, db='gift_db', loop=loop, charset='utf8')
 
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cur:
+        # check data existance
+        row = await PostedIds.query.where(
+            PostedIds.id == import_id).gino.scalar()
+        if not row:
+            response_obj = {'error': 'Import not found'}
+            return web.json_response(response_obj, status=404)
 
-                # check data existance
-                text = 'SELECT id FROM posted_ids WHERE id = %s;'
-                await cur.execute(text, import_id)
-                if not (await cur.fetchall()):
-                    response_obj = {'error': 'Import not found'}
-                    return web.json_response(response_obj, status=404)
+        # read data from imports table with import_id
+        rows = await Imports.select(*CITIZEN_FIELDS).where(
+            Imports.import_id == import_id).gino.all()
+        citizens_obj_list = []
+        for row in rows:
+            citizen_obj = dict(zip(CITIZEN_FIELDS, row))
+            invert_date(citizen_obj)
+            citizens_obj_list.append(citizen_obj)
+        response_obj = {'data': citizens_obj_list}
 
-                # read data from imports table with import_id
-                fields = ', '.join(CITIZEN_FIELDS)
-                text = f'SELECT {fields} FROM imports WHERE import_id = %s;'
-                await cur.execute(text, import_id)
-                citizens_obj_list = []
-                async for r in cur:
-                    citizen_obj = dict(zip(CITIZEN_FIELDS, r))
-                    invert_date(citizen_obj)
-                    citizens_obj_list.append(citizen_obj)
-                response_obj = {'data': citizens_obj_list}
-
-                # read data from relations table with import_id
-                text = 'SELECT x, y FROM relations WHERE import_id = %s;'
-                await cur.execute(text, import_id)
-                rels = dict()
-                async for r in cur:
-                    i, j = r[0], r[1]
-                    if i not in rels:
-                        rels[i] = list()
-                    rels[i].append(j)
-                for citizen in response_obj['data']:
-                    i = citizen['citizen_id']
-                    if i in rels:
-                        citizen['relatives'] = rels[i]
-                    else:
-                        citizen['relatives'] = []
-
-        pool.close()
-        await pool.wait_closed()
+        # read data from relations table with import_id
+        rows = await Relations.select('x', 'y').where(
+            Relations.import_id == import_id).gino.all()
+        rels = dict()
+        for row in rows:
+            i, j = row[0], row[1]
+            if i not in rels:
+                rels[i] = list()
+            rels[i].append(j)
+        for citizen in response_obj['data']:
+            i = citizen['citizen_id']
+            if i in rels:
+                citizen['relatives'] = rels[i]
+            else:
+                citizen['relatives'] = []
 
         return web.json_response(response_obj, status=200)
 
@@ -454,55 +438,45 @@ async def load_donators_by_months(request):
 
         # inits
         import_id = int(request.match_info['import_id'])
-        pool = await aiomysql.create_pool(
-            host='localhost', port=3306, user='gift_server',
-            password=db_password, db='gift_db', loop=loop, charset='utf8')
 
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cur:
+        # check data existance
+        row = await PostedIds.query.where(
+            PostedIds.id == import_id).gino.scalar()
+        if not row:
+            response_obj = {'error': 'Import not found'}
+            return web.json_response(response_obj, status=404)
 
-                # check data existance
-                text = 'SELECT id FROM posted_ids WHERE id = %s;'
-                await cur.execute(text, import_id)
-                if not (await cur.fetchall()):
-                    response_obj = {'error': 'Import not found'}
-                    return web.json_response(response_obj, status=404)
+        # read data from imports table with import_id
+        rows = await Imports.select('citizen_id', 'birth_date').where(
+            Imports.import_id == import_id).gino.all()
+        id_to_info = dict()
+        for row in rows:
+            id_to_info[row[0]] = {'bdate': row[1], 'rels': []}
 
-                # read data from imports table with import_id
-                text = ('SELECT citizen_id, birth_date FROM imports '
-                        'WHERE import_id = %s;')
-                await cur.execute(text, import_id)
-                id_to_info = dict()
-                async for r in cur:
-                    id_to_info[r[0]] = {'bdate': r[1], 'rels': []}
+        # read data from relations table with import_id
+        rows = await Relations.select('x', 'y').where(
+            Relations.import_id == import_id).gino.all()
+        for row in rows:
+            id_to_info[row[0]]['rels'].append(row[1])
 
-                # read data from relations table with import_id
-                text = 'SELECT x, y FROM relations WHERE import_id = %s;'
-                await cur.execute(text, import_id)
-                async for r in cur:
-                    id_to_info[r[0]]['rels'].append(r[1])
+        # calc distribution by months
+        months_dist = [dict() for _ in range(13)]
+        for i, obj in id_to_info.items():
+            month = int(obj['bdate'].split('.')[1])
+            for donator in obj['rels']:
+                present_cnt = months_dist[month]
+                if donator not in present_cnt:
+                    present_cnt[donator] = 0
+                present_cnt[donator] += 1
 
-                # calc distribution by months
-                months_dist = [dict() for _ in range(13)]
-                for i, obj in id_to_info.items():
-                    month = int(obj['bdate'].split('.')[1])
-                    for donator in obj['rels']:
-                        present_cnt = months_dist[month]
-                        if donator not in present_cnt:
-                            present_cnt[donator] = 0
-                        present_cnt[donator] += 1
+        # convert distribution to json-response
+        response_obj = {str(i): [] for i in range(1, 13)}
+        for month, present_cnt in enumerate(months_dist[1:], 1):
+            for donator, cnt in present_cnt.items():
+                response_obj[str(month)].append({'citizen_id': donator,
+                                                 'presents': cnt})
 
-                # convert distribution to json-response
-                response_obj = {str(i): [] for i in range(1, 13)}
-                for month, present_cnt in enumerate(months_dist[1:], 1):
-                    for donator, cnt in present_cnt.items():
-                        response_obj[str(month)].append({'citizen_id': donator,
-                                                         'presents': cnt})
-                response_obj = {'data': response_obj}
-
-        pool.close()
-        await pool.wait_closed()
-
+        response_obj = {'data': response_obj}
         return web.json_response(response_obj, status=200)
 
     except Exception as e:
@@ -517,47 +491,37 @@ async def load_agestat_by_towns(request):
 
         # inits
         import_id = int(request.match_info['import_id'])
-        pool = await aiomysql.create_pool(
-            host='localhost', port=3306, user='gift_server',
-            password=db_password, db='gift_db', loop=loop, charset='utf8')
 
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cur:
+        # check data existance
+        row = await PostedIds.query.where(
+            PostedIds.id == import_id).gino.scalar()
+        if not row:
+            response_obj = {'error': 'Import not found'}
+            return web.json_response(response_obj, status=404)
 
-                # check data existance
-                text = 'SELECT id FROM posted_ids WHERE id = %s;'
-                await cur.execute(text, import_id)
-                if not (await cur.fetchall()):
-                    response_obj = {'error': 'Import not found'}
-                    return web.json_response(response_obj, status=404)
+        # read data from imports table with import_id
+        rows = await Imports.select('town', 'birth_date').where(
+            Imports.import_id == import_id).order_by(
+                Imports.birth_date.desc()).gino.all()
+        cur_date = datetime.datetime.utcnow().date()
+        town_ages_dict = {}
+        for row in rows:
+            town = row[0]
+            bdate = datetime.date(*(int(i) for i in row[1].split('.')))
+            if town not in town_ages_dict:
+                town_ages_dict[town] = []
+            town_ages_dict[town].append(sub_years(cur_date, bdate))
 
-                # read data from imports table with import_id
-                text = ('SELECT town, birth_date FROM imports '
-                        'WHERE import_id = %s ORDER BY birth_date DESC;')
-                await cur.execute(text, import_id)
-                cur_date = datetime.datetime.utcnow().date()
-                town_ages_dict = {}
-                async for r in cur:
-                    town = r[0]
-                    bdate = datetime.date(*(int(i) for i in r[1].split('.')))
-                    if town not in town_ages_dict:
-                        town_ages_dict[town] = []
-                    town_ages_dict[town].append(sub_years(cur_date, bdate))
+        # calc percentiles
+        percentiles_obj = []
+        for town, bdates in town_ages_dict.items():
+            town_obj = {"town": town}
+            town_obj["p50"] = round(numpy.percentile(bdates, 50), 2)
+            town_obj["p75"] = round(numpy.percentile(bdates, 75), 2)
+            town_obj["p99"] = round(numpy.percentile(bdates, 99), 2)
+            percentiles_obj.append(town_obj)
 
-                # calc percentiles
-                percentiles_obj = []
-                for town, bdates in town_ages_dict.items():
-                    town_obj = {"town": town}
-                    town_obj["p50"] = round(numpy.percentile(bdates, 50), 2)
-                    town_obj["p75"] = round(numpy.percentile(bdates, 75), 2)
-                    town_obj["p99"] = round(numpy.percentile(bdates, 99), 2)
-                    percentiles_obj.append(town_obj)
-
-                response_obj = {'data': percentiles_obj}
-
-        pool.close()
-        await pool.wait_closed()
-
+        response_obj = {'data': percentiles_obj}
         return web.json_response(response_obj, status=200)
 
     except Exception as e:
@@ -567,66 +531,11 @@ async def load_agestat_by_towns(request):
 
 async def init(app):
 
-    pool = await aiomysql.create_pool(
-        host='localhost', port=3306, user='gift_server',
-        password=db_password, db='gift_db', loop=loop, charset='utf8')
+    await db.set_bind(
+        f'postgresql://gift_server:{db_password}@localhost/gift_db')
 
-    # create tables
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-
-            engine = 'InnoDB'  # 'MyISAM'
-
-            # create table for citizen imports
-            try:
-                await cur.execute('CREATE TABLE imports ('
-                                  '    import_id  int,'
-                                  '    citizen_id int,'
-                                  '    town       varchar(255),'
-                                  '    street     varchar(255),'
-                                  '    building   varchar(255),'
-                                  '    apartment  int,'
-                                  '    name       varchar(255),'
-                                  '    birth_date varchar(255),'
-                                  '    gender     varchar(255)) '
-                                  f'ENGINE = {engine};')
-                await cur.execute('CREATE INDEX id_index '
-                                  'ON imports (import_id);')
-            except Exception:
-                pass
-
-            # create table for citizens family relationship
-            try:
-                await cur.execute('CREATE TABLE relations '
-                                  '(import_id int, x int, y int) '
-                                  f'ENGINE = {engine};')
-                await cur.execute('CREATE INDEX id_index '
-                                  'ON relations (import_id);')
-            except Exception:
-                pass
-
-            # create table for unique identifiers
-            try:
-                await cur.execute('CREATE TABLE unique_ids('
-                                  'id int NOT NULL AUTO_INCREMENT, '
-                                  'PRIMARY KEY (id)) '
-                                  f'ENGINE = {engine};')
-            except Exception:
-                pass
-
-            # create posted import ids table
-            try:
-                await cur.execute('CREATE TABLE posted_ids('
-                                  'id int NOT NULL AUTO_INCREMENT, '
-                                  'PRIMARY KEY (id)) '
-                                  f'ENGINE = {engine};')
-            except Exception:
-                pass
-
-        await conn.commit()
-
-    pool.close()
-    await pool.wait_closed()
+    # create tables fir classes: Imports, Relations, UniqueIds, PostedIds
+    await db.gino.create_all()
 
     yield
 
@@ -637,7 +546,7 @@ def main():
 
     # init globals
     loop = asyncio.get_event_loop()
-    db_password = 'Qwerty!0'
+    db_password = 'Qwerty?0'
 
     # make application
     app = web.Application(client_max_size=1024*1024*10)
