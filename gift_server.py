@@ -21,10 +21,10 @@ class IncorrectData(Exception):
     pass
 
 
-class Imports(db.Model):
+class Citizen(db.Model):
     """Table with common data about citizens"""
 
-    __tablename__ = 'imports'
+    __tablename__ = 'citizens'
 
     import_id = db.Column(db.Integer())
     citizen_id = db.Column(db.Integer())
@@ -39,7 +39,7 @@ class Imports(db.Model):
     _idx1 = db.Index('imps_import_id_idx', 'import_id')
 
 
-class Relations(db.Model):
+class Relation(db.Model):
     """Table with family relationships data"""
 
     __tablename__ = 'relations'
@@ -51,18 +51,10 @@ class Relations(db.Model):
     _idx1 = db.Index('rels_import_id_idx', 'import_id')
 
 
-class UniqueIds(db.Model):
+class Import(db.Model):
     """Table with unique identifiers of import tables"""
 
-    __tablename__ = 'unique_ids'
-
-    id = db.Column(db.Integer(), primary_key=True)
-
-
-class PostedIds(db.Model):
-    """Table with identifiers of posted imports"""
-
-    __tablename__ = 'posted_ids'
+    __tablename__ = 'imports'
 
     id = db.Column(db.Integer(), primary_key=True)
 
@@ -70,7 +62,7 @@ class PostedIds(db.Model):
 async def create_unique_id():
     """Getting unique id for new table"""
 
-    row = await UniqueIds.create()
+    row = await Import.create()
     return row.id
 
 
@@ -242,25 +234,22 @@ async def store_import(request):
         except IncorrectData as e:
             return web.json_response({'error': str(e)}, status=400)
 
-        # create unique id
-        import_id = await create_unique_id()
-
-        # fill imports table by rows with import_id
         async with db.transaction():
+
+            # create unique id
+            import_id = await create_unique_id()
+
+            # fill citizens table by rows with import_id
             for citizen_obj in post_obj['citizens']:
-                await Imports.create(
+                await Citizen.create(
                     import_id=import_id,
                     **{f: citizen_obj[f] for f in CITIZEN_FIELDS})
 
-        # fill relations table by rows with import_id
-        async with db.transaction():
+            # fill relations table by rows with import_id
             for citizen_obj in post_obj['citizens']:
                 x = citizen_obj['citizen_id']
                 for y in citizen_obj['relatives']:
-                    await Relations.create(import_id=import_id, x=x, y=y)
-
-        # mark import like 'posted'
-        await PostedIds.create(id=import_id)
+                    await Relation.create(import_id=import_id, x=x, y=y)
 
         response_obj = {'data': {'import_id': import_id}}
         return web.json_response(response_obj, status=201)
@@ -270,8 +259,8 @@ async def store_import(request):
         traceback.print_exc()
 
         try:
-            await Imports.delete.where(Imports.import_id == import_id)
-            await Relations.delete.where(Imports.import_id == import_id)
+            await Citizen.delete.where(Citizen.import_id == import_id)
+            await Relation.delete.where(Citizen.import_id == import_id)
         except Exception:
             pass
 
@@ -309,15 +298,15 @@ async def alter_import(request):
         citizen_id = int(request.match_info['citizen_id'])
 
         # check data existance
-        row = await PostedIds.query.where(
-            PostedIds.id == import_id).gino.scalar()
+        row = await Import.query.where(
+            Import.id == import_id).gino.scalar()
         if not row:
             response_obj = {'error': 'Import not found'}
             return web.json_response(response_obj, status=404)
 
         # check relations (part 2 - check existance of relatives in import)
-        rows = await Imports.select('citizen_id').where(
-            Imports.import_id == import_id).gino.all()
+        rows = await Citizen.select('citizen_id').where(
+            Citizen.import_id == import_id).gino.all()
         for row in rows:
             cit_id = row[0]
             if cit_id in relations:
@@ -328,52 +317,51 @@ async def alter_import(request):
             return web.json_response(response_obj, status=400)
 
         # check citizen existence
-        citizen = await Imports.query.where(
-            and_(Imports.import_id == import_id,
-                 Imports.citizen_id == citizen_id)).gino.scalar()
+        citizen = await Citizen.query.where(
+            and_(Citizen.import_id == import_id,
+                 Citizen.citizen_id == citizen_id)).gino.scalar()
         if not citizen:
             response_obj = {'error': f'Wrong citizen_id: {citizen_id}'}
             return web.json_response(response_obj, status=404)
 
-        # prepare data for alter imports table
+        # prepare data for alter citizens table
         patch_norel_obj = dict(patch_obj)
         if 'relatives' in patch_norel_obj:
             del patch_norel_obj['relatives']
 
-        # change data transaction
         async with db.transaction():
 
-            # alter fields in imports table with import_id
+            # alter fields in citizens table with import_id
             if patch_norel_obj:
-                await Imports.update.values(**patch_norel_obj).where(
-                    and_(Imports.import_id == import_id,
-                         Imports.citizen_id == citizen_id)).gino.status()
+                await Citizen.update.values(**patch_norel_obj).where(
+                    and_(Citizen.import_id == import_id,
+                         Citizen.citizen_id == citizen_id)).gino.status()
 
             # alter relations in table with import_id
             # (ceate a single string for single transaction - this ensure
             #  data correctness, if client send many requests in parallel)
             if 'relatives' in patch_obj:
                 i = citizen_id
-                await Relations.delete.where(
-                    and_(Relations.import_id == import_id,
-                         or_(Relations.x == i,
-                             Relations.y == i))).gino.status()
+                await Relation.delete.where(
+                    and_(Relation.import_id == import_id,
+                         or_(Relation.x == i,
+                             Relation.y == i))).gino.status()
                 for j in patch_obj['relatives']:
-                    await Relations.create(import_id=import_id, x=i, y=j)
+                    await Relation.create(import_id=import_id, x=i, y=j)
                     if i != j:
-                        await Relations.create(import_id=import_id, x=j, y=i)
+                        await Relation.create(import_id=import_id, x=j, y=i)
 
-        # control reading citizen data for response to client
-        rows = await Imports.select(*CITIZEN_FIELDS).where(
-            and_(Imports.import_id == import_id,
-                 Imports.citizen_id == citizen_id)).gino.all()
-        citizen_obj = dict(zip(CITIZEN_FIELDS, rows[0]))
-        invert_date(citizen_obj)
-        rows = await Relations.select('y').where(
-            and_(Relations.import_id == import_id,
-                 Relations.x == citizen_id)).gino.all()
-        rels = [row[0] for row in rows]
-        citizen_obj['relatives'] = list(rels) if rels else list()
+            # control reading citizen data for response to client
+            rows = await Citizen.select(*CITIZEN_FIELDS).where(
+                and_(Citizen.import_id == import_id,
+                     Citizen.citizen_id == citizen_id)).gino.all()
+            citizen_obj = dict(zip(CITIZEN_FIELDS, rows[0]))
+            invert_date(citizen_obj)
+            rows = await Relation.select('y').where(
+                and_(Relation.import_id == import_id,
+                     Relation.x == citizen_id)).gino.all()
+            rels = [row[0] for row in rows]
+            citizen_obj['relatives'] = list(rels) if rels else list()
 
         response_obj = {'data': citizen_obj}
         return web.json_response(response_obj, status=200)
@@ -392,15 +380,15 @@ async def load_import(request):
         import_id = int(request.match_info['import_id'])
 
         # check data existance
-        row = await PostedIds.query.where(
-            PostedIds.id == import_id).gino.scalar()
+        row = await Import.query.where(
+            Import.id == import_id).gino.scalar()
         if not row:
             response_obj = {'error': 'Import not found'}
             return web.json_response(response_obj, status=404)
 
-        # read data from imports table with import_id
-        rows = await Imports.select(*CITIZEN_FIELDS).where(
-            Imports.import_id == import_id).gino.all()
+        # read data from citizens table with import_id
+        rows = await Citizen.select(*CITIZEN_FIELDS).where(
+            Citizen.import_id == import_id).gino.all()
         citizens_obj_list = []
         for row in rows:
             citizen_obj = dict(zip(CITIZEN_FIELDS, row))
@@ -409,8 +397,8 @@ async def load_import(request):
         response_obj = {'data': citizens_obj_list}
 
         # read data from relations table with import_id
-        rows = await Relations.select('x', 'y').where(
-            Relations.import_id == import_id).gino.all()
+        rows = await Relation.select('x', 'y').where(
+            Relation.import_id == import_id).gino.all()
         rels = dict()
         for row in rows:
             i, j = row[0], row[1]
@@ -440,22 +428,22 @@ async def load_donators_by_months(request):
         import_id = int(request.match_info['import_id'])
 
         # check data existance
-        row = await PostedIds.query.where(
-            PostedIds.id == import_id).gino.scalar()
+        row = await Import.query.where(
+            Import.id == import_id).gino.scalar()
         if not row:
             response_obj = {'error': 'Import not found'}
             return web.json_response(response_obj, status=404)
 
-        # read data from imports table with import_id
-        rows = await Imports.select('citizen_id', 'birth_date').where(
-            Imports.import_id == import_id).gino.all()
+        # read data from citizens table with import_id
+        rows = await Citizen.select('citizen_id', 'birth_date').where(
+            Citizen.import_id == import_id).gino.all()
         id_to_info = dict()
         for row in rows:
             id_to_info[row[0]] = {'bdate': row[1], 'rels': []}
 
         # read data from relations table with import_id
-        rows = await Relations.select('x', 'y').where(
-            Relations.import_id == import_id).gino.all()
+        rows = await Relation.select('x', 'y').where(
+            Relation.import_id == import_id).gino.all()
         for row in rows:
             id_to_info[row[0]]['rels'].append(row[1])
 
@@ -493,16 +481,16 @@ async def load_agestat_by_towns(request):
         import_id = int(request.match_info['import_id'])
 
         # check data existance
-        row = await PostedIds.query.where(
-            PostedIds.id == import_id).gino.scalar()
+        row = await Import.query.where(
+            Import.id == import_id).gino.scalar()
         if not row:
             response_obj = {'error': 'Import not found'}
             return web.json_response(response_obj, status=404)
 
-        # read data from imports table with import_id
-        rows = await Imports.select('town', 'birth_date').where(
-            Imports.import_id == import_id).order_by(
-                Imports.birth_date.desc()).gino.all()
+        # read data from citizens table with import_id
+        rows = await Citizen.select('town', 'birth_date').where(
+            Citizen.import_id == import_id).order_by(
+                Citizen.birth_date.desc()).gino.all()
         cur_date = datetime.datetime.utcnow().date()
         town_ages_dict = {}
         for row in rows:
@@ -534,7 +522,7 @@ async def init(app):
     await db.set_bind(
         f'postgresql://gift_server:{db_password}@localhost/gift_db')
 
-    # create tables fir classes: Imports, Relations, UniqueIds, PostedIds
+    # create tables for classes: Citizen, Relation, Import
     await db.gino.create_all()
 
     yield
